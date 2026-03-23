@@ -20,11 +20,13 @@
 当前仓库已经有第一版可运行骨架：
 - 移动端优先首页
 - 每日训练入口
+- 本地每日抽题与设置项：`5 / 10 / 20` 词，`60 / 90` 秒
 - 回合原型：计时器、提示按钮、拼写输入、反馈流
-- 错词预览与 momentum 面板
-- provider adapter 预留接口
+- 浏览器端错词本与进度持久化
+- 浏览器 speech synthesis pronouncer fallback
+- provider adapter 结构，便于后续接入真实服务
 
-当前仍是 `mock data` 原型，真实词典、TTS、错词持久化还没有接入。
+当前仍未接入真实外部服务，`Merriam-Webster`、正式 TTS、云端存储还在后续阶段。
 
 ## Local Run
 
@@ -54,5 +56,5 @@ tasks/             working notes required by rules.md
 
 1. 用真实词源替换 mock session 数据。
 2. 接入 `Merriam-Webster` 词典 adapter。
-3. 接入 pronouncer TTS 和音频缓存。
-4. 落持久化错词本与每日调度。
+3. 接入正式 pronouncer TTS 和音频缓存。
+4. 把浏览器端 notebook 升级为可同步的持久化数据层。

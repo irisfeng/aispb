@@ -2,8 +2,35 @@
 
 import { startTransition, useEffect, useEffectEvent, useState } from "react";
 
-import { drillPreset, promptOrder, providerCards } from "@/lib/mock-session";
-import type { DrillPromptKind, SubmissionState } from "@/lib/types";
+import {
+  getPromptPreview,
+  localCoachAdapter,
+  localDictionaryAdapter,
+  localPronouncerAdapter,
+  providerCards,
+} from "@/lib/local-adapters";
+import {
+  applyDrillResult,
+  createDrillPlan,
+  getNotebookEntries,
+  getTodayKey,
+} from "@/lib/session-engine";
+import {
+  defaultSettings,
+  loadProgress,
+  loadSettings,
+  saveProgress,
+  saveSettings,
+} from "@/lib/storage";
+import type {
+  DrillPlan,
+  DrillPromptKind,
+  DrillSettings,
+  NotebookEntry,
+  ProgressMap,
+  SubmissionState,
+} from "@/lib/types";
+import { wordBank } from "@/lib/word-bank";
 
 type FeedEntryTone = "system" | "hint" | "success" | "danger";
 
@@ -14,20 +41,26 @@ interface FeedEntry {
   content: string;
 }
 
-const statusCopy: Record<SubmissionState, string> = {
-  idle: "Say each letter cleanly. One wrong character breaks the run.",
-  correct: "Correct. Clean entry, clean exit.",
-  incorrect: "Miss recorded. Start over and rebuild the spelling from the top.",
-  timeout: "Time expired. This word goes to the notebook for review.",
-};
-
+const goalOptions = [5, 10, 20];
+const roundOptions = [60, 90];
+const promptOrder: DrillPromptKind[] = [
+  "repeat",
+  "definition",
+  "sentence",
+  "origin",
+];
 const promptLabels: Record<DrillPromptKind, string> = {
   repeat: "Repeat",
   definition: "Definition",
   sentence: "Sentence",
   origin: "Origin",
 };
-
+const statusCopy: Record<SubmissionState, string> = {
+  idle: "Listen first, then spell with complete precision.",
+  correct: "Correct. The round advances automatically.",
+  incorrect: "Miss logged. The word moves into review.",
+  timeout: "Time expired. The word moves into review.",
+};
 const feedToneClass: Record<FeedEntryTone, string> = {
   system: "border-[color:var(--line)] bg-white/70 text-[color:var(--muted)]",
   hint: "border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)]/60 text-[color:var(--foreground)]",
@@ -37,7 +70,6 @@ const feedToneClass: Record<FeedEntryTone, string> = {
     "border-[color:var(--signal)] bg-[color:var(--signal)]/10 text-[color:var(--foreground)]",
 };
 
-const totalWords = drillPreset.words.length;
 let feedId = 0;
 
 function createFeedEntry(
@@ -53,74 +85,212 @@ function createFeedEntry(
   };
 }
 
+function createPreviewPlan(settings: DrillSettings, progress: ProgressMap) {
+  return createDrillPlan({
+    words: wordBank,
+    settings,
+    progress,
+    todayKey: getTodayKey(),
+  });
+}
+
+function pronounce(text: string) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    return false;
+  }
+
+  const synth = window.speechSynthesis;
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voices = synth.getVoices();
+  const preferredVoice =
+    voices.find((voice) => voice.lang.toLowerCase().includes("en-us")) ??
+    voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
+
+  utterance.lang = preferredVoice?.lang ?? "en-US";
+  utterance.rate = 0.83;
+  utterance.pitch = 0.94;
+
+  if (preferredVoice) {
+    utterance.voice = preferredVoice;
+  }
+
+  synth.cancel();
+  synth.speak(utterance);
+
+  return true;
+}
+
 export function AispbApp() {
+  const [storageReady, setStorageReady] = useState(false);
+  const [settings, setSettings] = useState<DrillSettings>(defaultSettings);
+  const [progress, setProgress] = useState<ProgressMap>({});
+  const [activePlan, setActivePlan] = useState<DrillPlan | null>(null);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(
-    drillPreset.roundDurationSeconds,
+    defaultSettings.roundDurationSeconds,
   );
   const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState<SubmissionState>("idle");
-  const [wrongWordIds, setWrongWordIds] = useState<string[]>([]);
   const [hintsUsed, setHintsUsed] = useState<DrillPromptKind[]>([]);
   const [restartCount, setRestartCount] = useState(0);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
+  const [sessionCorrectCount, setSessionCorrectCount] = useState(0);
+  const [sessionMissCount, setSessionMissCount] = useState(0);
+  const [speechReady, setSpeechReady] = useState(false);
   const [feed, setFeed] = useState<FeedEntry[]>([
     {
       id: "feed-initial",
       label: "Warmup",
       content:
-        "Pronouncer ready. Tap a prompt below to simulate Bee-style dialogue.",
+        "Local MVP is ready. Start a drill to generate a fresh daily plan and notebook-aware review list.",
       tone: "system",
     },
   ]);
 
-  const currentWord = drillPreset.words[currentIndex];
+  const todayKey = getTodayKey();
+  const previewPlan = createPreviewPlan(settings, progress);
+  const plan = activePlan ?? previewPlan;
+  const sessionWords = plan.words;
+  const totalWords = sessionWords.length;
+  const currentWord = sessionWords[currentIndex] ?? sessionWords[0];
+  const notebookEntries = getNotebookEntries({
+    words: wordBank,
+    progress,
+    todayKey,
+  });
+  const dueNotebookCount = notebookEntries.filter(
+    (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
+  ).length;
+  const interactionLocked =
+    !sessionStarted || sessionComplete || status !== "idle";
+  const timerDegrees =
+    (secondsLeft / Math.max(plan.settings.roundDurationSeconds, 1)) * 360;
   const progressPercent =
-    ((sessionComplete ? totalWords : currentIndex) / totalWords) * 100;
-  const timerDegrees = (secondsLeft / drillPreset.roundDurationSeconds) * 360;
-  const wrongWords = drillPreset.words.filter((word) =>
-    wrongWordIds.includes(word.id),
+    totalWords === 0
+      ? 0
+      : sessionComplete
+        ? 100
+        : (currentIndex / totalWords) * 100;
+  const sessionAccuracy = Math.round(
+    (sessionCorrectCount /
+      Math.max(sessionCorrectCount + sessionMissCount, 1)) *
+      100,
   );
 
-  const openPrompt = (kind: DrillPromptKind) => {
-    if (!currentWord) {
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      const nextSettings = loadSettings();
+      const nextProgress = loadProgress();
+
+      setSettings(nextSettings);
+      setProgress(nextProgress);
+      setSecondsLeft(nextSettings.roundDurationSeconds);
+      setSpeechReady(
+        typeof window !== "undefined" && "speechSynthesis" in window,
+      );
+      setStorageReady(true);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) {
       return;
     }
 
-    const content =
-      kind === "repeat"
-        ? `Pronouncer repeats the word. ${currentWord.pronunciationNote}`
-        : kind === "definition"
-          ? currentWord.definition
-          : kind === "sentence"
-            ? currentWord.sentence
-            : currentWord.origin;
+    saveSettings(settings);
+  }, [settings, storageReady]);
 
-    setHintsUsed((previous) =>
-      previous.includes(kind) ? previous : [...previous, kind],
-    );
-    setFeed((previous) => [
+  useEffect(() => {
+    if (!storageReady) {
+      return;
+    }
+
+    saveProgress(progress);
+  }, [progress, storageReady]);
+
+  useEffect(() => {
+    if (!sessionStarted || !currentWord) {
+      return;
+    }
+
+    if (!settings.pronouncerEnabled) {
+      return;
+    }
+
+    void localPronouncerAdapter
+      .getSpokenText(currentWord, "repeat")
+      .then((text) => {
+        pronounce(text);
+      });
+  }, [
+    currentIndex,
+    currentWord,
+    currentWord?.id,
+    sessionStarted,
+    settings.pronouncerEnabled,
+  ]);
+
+  function updateSettings(patch: Partial<DrillSettings>) {
+    setSettings((previous) => {
+      const nextSettings = {
+        ...previous,
+        ...patch,
+      };
+
+      if (!sessionStarted && patch.roundDurationSeconds) {
+        setSecondsLeft(patch.roundDurationSeconds);
+      }
+
+      return nextSettings;
+    });
+  }
+
+  function beginSession() {
+    const nextPlan = createPreviewPlan(settings, progress);
+
+    setActivePlan(nextPlan);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setCurrentIndex(0);
+    setSecondsLeft(nextPlan.settings.roundDurationSeconds);
+    setAnswer("");
+    setStatus("idle");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setFeed([
       createFeedEntry(
-        promptLabels[kind],
-        content,
-        kind === "repeat" ? "system" : "hint",
+        "Session start",
+        `Today's deck is ready: ${nextPlan.stats.reviewCount} review word(s), ${nextPlan.stats.freshCount} fresh word(s). Round 1 is live.`,
+        "system",
       ),
-      ...previous,
     ]);
-  };
+  }
 
-  const advanceWord = () => {
+  function advanceWord() {
     startTransition(() => {
-      if (currentIndex === totalWords - 1) {
+      if (!activePlan) {
+        return;
+      }
+
+      if (currentIndex === activePlan.words.length - 1) {
         setSessionComplete(true);
         setSessionStarted(false);
         setFeed((previous) => [
           createFeedEntry(
-            "Session",
-            "Prototype complete. Next pass will wire real adapters and persistence.",
+            "Session complete",
+            `Finished ${activePlan.words.length} word(s). Accuracy ${Math.round(
+              (sessionCorrectCount /
+                Math.max(sessionCorrectCount + sessionMissCount, 1)) *
+                100,
+            )}% this run.`,
             "success",
           ),
           ...previous,
@@ -129,7 +299,7 @@ export function AispbApp() {
       }
 
       setCurrentIndex((previous) => previous + 1);
-      setSecondsLeft(drillPreset.roundDurationSeconds);
+      setSecondsLeft(activePlan.settings.roundDurationSeconds);
       setAnswer("");
       setStatus("idle");
       setHintsUsed([]);
@@ -137,47 +307,58 @@ export function AispbApp() {
       setFeed((previous) => [
         createFeedEntry(
           "Next word",
-          `Round ${currentIndex + 2} is queued. Pronouncer is ready again.`,
+          `Round ${currentIndex + 2} is live. Listen first, then spell.`,
           "system",
         ),
         ...previous,
       ]);
     });
-  };
+  }
 
-  const registerMiss = (reason: "incorrect" | "timeout") => {
+  async function registerMiss(
+    result: Exclude<SubmissionState, "idle" | "correct">,
+    attempt: string,
+  ) {
     if (!currentWord) {
       return;
     }
 
-    setWrongWordIds((previous) =>
-      previous.includes(currentWord.id)
-        ? previous
-        : [...previous, currentWord.id],
+    const coachCopy = await localCoachAdapter.summarizeMiss(
+      currentWord,
+      attempt,
+      result,
     );
+
+    setProgress((previous) =>
+      applyDrillResult({
+        progress: previous,
+        wordId: currentWord.id,
+        result,
+        todayKey,
+      }),
+    );
+    setSessionMissCount((previous) => previous + 1);
     setStreak(0);
-    setStatus(reason);
+    setStatus(result);
     setFeed((previous) => [
       createFeedEntry(
-        reason === "timeout" ? "Timed out" : "Miss logged",
-        `${currentWord.word} will return in the review notebook. ${currentWord.coachingNote}`,
+        result === "timeout" ? "Timed out" : "Miss logged",
+        coachCopy,
         "danger",
       ),
       ...previous,
     ]);
 
-    if (reason === "timeout") {
-      window.setTimeout(() => {
-        advanceWord();
-      }, 900);
-    }
-  };
+    window.setTimeout(() => {
+      advanceWord();
+    }, 950);
+  }
 
   const tick = useEffectEvent(() => {
     setSecondsLeft((previous) => {
       if (previous <= 1) {
-        registerMiss("timeout");
-        return drillPreset.roundDurationSeconds;
+        void registerMiss("timeout", answer.trim());
+        return plan.settings.roundDurationSeconds;
       }
 
       return previous - 1;
@@ -194,44 +375,62 @@ export function AispbApp() {
     }, 1000);
 
     return () => window.clearInterval(intervalId);
-  }, [sessionStarted, sessionComplete]);
+  }, [sessionComplete, sessionStarted]);
 
-  const beginSession = () => {
-    setSessionStarted(true);
-    setSessionComplete(false);
-    setCurrentIndex(0);
-    setSecondsLeft(drillPreset.roundDurationSeconds);
-    setAnswer("");
-    setStatus("idle");
-    setHintsUsed([]);
-    setRestartCount(0);
-    setWrongWordIds([]);
-    setStreak(0);
-    setFeed([
+  async function openPrompt(kind: DrillPromptKind) {
+    if (!currentWord || !sessionStarted || sessionComplete) {
+      return;
+    }
+
+    const displayText =
+      kind === "repeat"
+        ? getPromptPreview(currentWord, kind)
+        : kind === "definition"
+          ? await localDictionaryAdapter.getDefinition(currentWord)
+          : kind === "sentence"
+            ? await localDictionaryAdapter.getSentence(currentWord)
+            : await localDictionaryAdapter.getOrigin(currentWord);
+
+    if (kind === "repeat" && settings.pronouncerEnabled) {
+      const spokenText = await localPronouncerAdapter.getSpokenText(
+        currentWord,
+        kind,
+      );
+      pronounce(spokenText);
+    }
+
+    setHintsUsed((previous) =>
+      previous.includes(kind) ? previous : [...previous, kind],
+    );
+    setFeed((previous) => [
       createFeedEntry(
-        "Session start",
-        "Pronouncer says the first word. Ask for a definition, sentence, or origin whenever needed.",
-        "system",
+        promptLabels[kind],
+        displayText,
+        kind === "repeat" ? "system" : "hint",
       ),
+      ...previous,
     ]);
-  };
+  }
 
-  const handleStartOver = () => {
+  function handleStartOver() {
+    if (!sessionStarted || sessionComplete || status !== "idle") {
+      return;
+    }
+
     setRestartCount((previous) => previous + 1);
     setAnswer("");
-    setStatus("idle");
     setFeed((previous) => [
       createFeedEntry(
         "Start over",
-        "Spelling reset. In the real rules, previously spoken letters cannot change order.",
+        "Spelling reset. In official play, previously spoken letters cannot be reordered after a restart.",
         "system",
       ),
       ...previous,
     ]);
-  };
+  }
 
-  const handleSubmit = () => {
-    if (!currentWord || !answer.trim()) {
+  async function handleSubmit() {
+    if (!currentWord || !answer.trim() || !sessionStarted || sessionComplete) {
       return;
     }
 
@@ -240,9 +439,19 @@ export function AispbApp() {
 
     if (normalizedAnswer === normalizedWord) {
       const nextStreak = streak + 1;
+
+      setProgress((previous) =>
+        applyDrillResult({
+          progress: previous,
+          wordId: currentWord.id,
+          result: "correct",
+          todayKey,
+        }),
+      );
       setStatus("correct");
       setStreak(nextStreak);
       setBestStreak((previous) => Math.max(previous, nextStreak));
+      setSessionCorrectCount((previous) => previous + 1);
       setFeed((previous) => [
         createFeedEntry(
           "Correct",
@@ -258,15 +467,41 @@ export function AispbApp() {
       return;
     }
 
-    registerMiss("incorrect");
-  };
+    await registerMiss("incorrect", answer.trim());
+  }
 
-  const activeAccuracy =
-    Math.round(
-      ((currentIndex - wrongWords.length + (status === "correct" ? 1 : 0)) /
-        Math.max(currentIndex + 1, 1)) *
-        100,
-    ) || 0;
+  function renderNotebookEntry(entry: NotebookEntry) {
+    const dueLabel =
+      !entry.progress.dueOn || entry.progress.dueOn <= todayKey
+        ? "due now"
+        : `due ${entry.progress.dueOn}`;
+
+    return (
+      <article
+        key={entry.word.id}
+        className="rounded-[22px] border border-[color:var(--line)] bg-white/72 p-4"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="font-[family:var(--font-display)] text-2xl text-[color:var(--foreground)]">
+            {entry.word.word}
+          </p>
+          <span className="rounded-full bg-[color:var(--signal)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--signal)]">
+            {dueLabel}
+          </span>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+          {entry.word.coachingNote}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="badge">misses {entry.progress.wrongCount}</span>
+          <span className="badge">
+            review load {entry.progress.reviewCount}
+          </span>
+          <span className="badge">streak {entry.progress.currentStreak}</span>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-8">
@@ -277,50 +512,123 @@ export function AispbApp() {
             <div>
               <p className="eyebrow">AISPB</p>
               <h1 className="display-copy mt-3 max-w-md text-4xl sm:text-5xl">
-                Daily spelling drills with the rhythm of a real Bee round.
+                Daily spelling drills with a real review loop behind them.
               </h1>
             </div>
             <div className="hidden rounded-full border border-[color:var(--line)] bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)] sm:block">
-              Mobile first
+              Local MVP
             </div>
           </div>
 
           <p className="mt-5 max-w-xl text-sm leading-7 text-[color:var(--muted)] sm:text-base">
-            This first scaffold focuses on the fundamentals: a clean daily
-            ritual, Bee-style prompt requests, flawless spelling validation, and
-            a review loop that turns misses into tomorrow&apos;s targets.
+            The scaffold now generates a daily plan from a seeded word bank,
+            keeps a browser-side notebook, and re-injects missed words into
+            future sessions before any external API is wired.
           </p>
 
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="stat-card">
-              <span className="stat-label">Plan</span>
-              <strong>{drillPreset.dailyGoal} words</strong>
+              <span className="stat-label">Deck</span>
+              <strong>{previewPlan.words.length} words</strong>
             </div>
             <div className="stat-card">
-              <span className="stat-label">Round</span>
-              <strong>{drillPreset.roundDurationSeconds}s</strong>
+              <span className="stat-label">Review</span>
+              <strong>{previewPlan.stats.reviewCount}</strong>
             </div>
             <div className="stat-card">
-              <span className="stat-label">Mode</span>
-              <strong>{drillPreset.modeLabel}</strong>
+              <span className="stat-label">Fresh</span>
+              <strong>{previewPlan.stats.freshCount}</strong>
             </div>
             <div className="stat-card">
-              <span className="stat-label">Focus</span>
-              <strong>Precision</strong>
+              <span className="stat-label">Notebook</span>
+              <strong>{dueNotebookCount} due</strong>
             </div>
           </div>
 
-          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-            <button
-              className="primary-button"
-              onClick={beginSession}
-              type="button"
-            >
-              Begin today&apos;s drill
-            </button>
-            <a className="secondary-button" href="#session">
-              Inspect session prototype
-            </a>
+          <div className="mt-7 flex flex-col gap-4">
+            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/72 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="eyebrow">Settings</p>
+                <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                  {speechReady ? "voice ready" : "voice unavailable"}
+                </span>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                  Daily goal
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {goalOptions.map((option) => (
+                    <button
+                      key={option}
+                      className={`setting-chip ${settings.dailyGoal === option ? "setting-chip-active" : ""}`}
+                      onClick={() => updateSettings({ dailyGoal: option })}
+                      type="button"
+                    >
+                      {option} words
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                  Round timer
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {roundOptions.map((option) => (
+                    <button
+                      key={option}
+                      className={`setting-chip ${settings.roundDurationSeconds === option ? "setting-chip-active" : ""}`}
+                      onClick={() =>
+                        updateSettings({ roundDurationSeconds: option })
+                      }
+                      type="button"
+                    >
+                      {option}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                    Pronouncer fallback
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-[color:var(--muted)]">
+                    Browser speech synthesis for local testing before external
+                    TTS.
+                  </p>
+                </div>
+                <button
+                  className={`setting-chip ${settings.pronouncerEnabled ? "setting-chip-active" : ""}`}
+                  disabled={!speechReady}
+                  onClick={() =>
+                    updateSettings({
+                      pronouncerEnabled: !settings.pronouncerEnabled,
+                    })
+                  }
+                  type="button"
+                >
+                  {settings.pronouncerEnabled ? "On" : "Off"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                className="primary-button"
+                onClick={beginSession}
+                type="button"
+              >
+                Begin today&apos;s drill
+              </button>
+              <a className="secondary-button" href="#session">
+                Jump to session
+              </a>
+            </div>
           </div>
         </div>
 
@@ -328,7 +636,7 @@ export function AispbApp() {
           <div className="flex items-center justify-between">
             <p className="eyebrow">Adapters</p>
             <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-              ready for wiring
+              swappable
             </span>
           </div>
 
@@ -342,13 +650,7 @@ export function AispbApp() {
                   <h2 className="text-sm font-semibold text-[color:var(--foreground)]">
                     {provider.label}
                   </h2>
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${
-                      provider.status === "ready"
-                        ? "bg-[color:var(--accent)]/12 text-[color:var(--accent)]"
-                        : "bg-[color:var(--sand)] text-[color:var(--foreground)]"
-                    }`}
-                  >
+                  <span className="rounded-full bg-[color:var(--accent)]/12 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[color:var(--accent)]">
                     {provider.status}
                   </span>
                 </div>
@@ -367,7 +669,9 @@ export function AispbApp() {
             <div>
               <p className="eyebrow">Session</p>
               <h2 className="mt-2 text-2xl font-semibold text-[color:var(--foreground)]">
-                Round {Math.min(currentIndex + 1, totalWords)} of {totalWords}
+                {sessionComplete
+                  ? "Session complete"
+                  : `Round ${Math.min(currentIndex + 1, Math.max(totalWords, 1))} of ${Math.max(totalWords, 1)}`}
               </h2>
             </div>
             <div
@@ -389,18 +693,27 @@ export function AispbApp() {
               <p className="text-sm uppercase tracking-[0.22em] text-white/55">
                 Pronouncer cue
               </p>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                {currentWord.category}
-              </span>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                  {currentWord?.category ?? "standby"}
+                </span>
+                {currentWord ? (
+                  <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                    {currentWord.planReason}
+                  </span>
+                ) : null}
+              </div>
             </div>
             <p className="mt-4 font-[family:var(--font-display)] text-4xl leading-none sm:text-5xl">
               Word{" "}
-              {String(Math.min(currentIndex + 1, totalWords)).padStart(2, "0")}
+              {String(
+                Math.min(currentIndex + 1, Math.max(totalWords, 1)),
+              ).padStart(2, "0")}
             </p>
             <p className="mt-4 max-w-lg text-sm leading-6 text-white/70">
-              American pronouncer voice staged. The written word stays hidden
-              until the round resolves. Current cue:{" "}
-              {currentWord.pronunciationNote}
+              {currentWord
+                ? `Current cue: ${currentWord.pronunciationNote}`
+                : "Start a session to load the first word."}
             </p>
           </div>
 
@@ -409,7 +722,10 @@ export function AispbApp() {
               <button
                 key={prompt}
                 className="action-button"
-                onClick={() => openPrompt(prompt)}
+                disabled={interactionLocked}
+                onClick={() => {
+                  void openPrompt(prompt);
+                }}
                 type="button"
               >
                 {promptLabels[prompt]}
@@ -417,6 +733,7 @@ export function AispbApp() {
             ))}
             <button
               className="action-button col-span-2 sm:col-span-5"
+              disabled={interactionLocked}
               onClick={handleStartOver}
               type="button"
             >
@@ -429,13 +746,11 @@ export function AispbApp() {
               Spell the word
             </label>
             <input
-              className="mt-3 w-full rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4 text-lg text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+              className="mt-3 w-full rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4 text-lg text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12 disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={!sessionStarted || sessionComplete || status !== "idle"}
               id="spelling-answer"
               onChange={(event) => {
                 setAnswer(event.target.value);
-                if (status !== "idle") {
-                  setStatus("idle");
-                }
               }}
               placeholder="type the full spelling here"
               spellCheck={false}
@@ -449,7 +764,12 @@ export function AispbApp() {
               </p>
               <button
                 className="primary-button justify-center px-5 py-3 text-sm"
-                onClick={handleSubmit}
+                disabled={
+                  !sessionStarted || sessionComplete || status !== "idle"
+                }
+                onClick={() => {
+                  void handleSubmit();
+                }}
                 type="button"
               >
                 Submit spelling
@@ -463,7 +783,7 @@ export function AispbApp() {
             <div className="flex items-center justify-between">
               <p className="eyebrow">Momentum</p>
               <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                {Math.max(activeAccuracy, 0)}% accuracy
+                {sessionAccuracy}% accuracy
               </span>
             </div>
 
@@ -490,8 +810,13 @@ export function AispbApp() {
             </div>
 
             <div className="mt-5 flex flex-wrap gap-2">
+              <span className="badge">correct {sessionCorrectCount}</span>
+              <span className="badge">misses {sessionMissCount}</span>
+              <span className="badge">
+                {plan.settings.roundDurationSeconds}s rounds
+              </span>
               {hintsUsed.length === 0 ? (
-                <span className="badge">No prompts used yet</span>
+                <span className="badge">No prompts used</span>
               ) : (
                 hintsUsed.map((hint) => (
                   <span key={hint} className="badge">
@@ -535,39 +860,22 @@ export function AispbApp() {
               <div>
                 <p className="eyebrow">Notebook</p>
                 <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
-                  Review queue
+                  Persistent review queue
                 </h3>
               </div>
               <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                {wrongWords.length} queued
+                {notebookEntries.length} tracked
               </span>
             </div>
 
             <div className="mt-4 space-y-3">
-              {wrongWords.length === 0 ? (
+              {notebookEntries.length === 0 ? (
                 <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
-                  Clean board so far. Any miss or timeout will land here with a
-                  coaching note.
+                  No notebook words yet. Misses and timeouts persist locally and
+                  return in future daily plans.
                 </div>
               ) : (
-                wrongWords.map((word) => (
-                  <article
-                    key={word.id}
-                    className="rounded-[22px] border border-[color:var(--line)] bg-white/72 p-4"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="font-[family:var(--font-display)] text-2xl text-[color:var(--foreground)]">
-                        {word.word}
-                      </p>
-                      <span className="rounded-full bg-[color:var(--signal)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--signal)]">
-                        revisit
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                      {word.coachingNote}
-                    </p>
-                  </article>
-                ))
+                notebookEntries.slice(0, 5).map(renderNotebookEntry)
               )}
             </div>
           </div>
