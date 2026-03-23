@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+:root {
+  --background: #efe7d8;
+  --paper: #f7f1e5;
+  --foreground: #112033;
+  --muted: #5f6d7a;
+  --line: rgba(17, 32, 51, 0.1);
+  --ink: #112033;
+  --accent: #0d7c66;
+  --accent-soft: #d7efe8;
+  --signal: #b85d2a;
+  --sand: #eadfca;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-paper: var(--paper);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-manrope);
+  --font-display: var(--font-fraunces);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.7), transparent 34%),
+    linear-gradient(180deg, #f5efdf 0%, #efe7d8 45%, #e6dbc5 100%);
+  color: var(--foreground);
+  font-family: var(--font-manrope), sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.6), transparent 85%);
+  pointer-events: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(13, 124, 102, 0.18);
+}
+
+@layer components {
+  .panel {
+    @apply rounded-[30px] border border-[color:var(--line)] bg-white/56 shadow-[0_24px_80px_rgba(17,32,51,0.10)] backdrop-blur-xl;
+  }
+
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)];
+  }
+
+  .display-copy {
+    font-family: var(--font-fraunces), serif;
+    line-height: 0.96;
+    letter-spacing: -0.04em;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center gap-2 rounded-full bg-[color:var(--ink)] px-5 py-3 font-semibold text-[color:var(--paper)] shadow-[0_14px_30px_rgba(17,32,51,0.18)] transition hover:-translate-y-0.5 hover:bg-[#0b1728];
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center gap-2 rounded-full border border-[color:var(--line)] bg-white/72 px-5 py-3 font-semibold text-[color:var(--foreground)] transition hover:-translate-y-0.5 hover:bg-white;
+  }
+
+  .action-button {
+    @apply inline-flex min-h-12 items-center justify-center rounded-[20px] border border-[color:var(--line)] bg-white/72 px-3 py-3 text-sm font-semibold text-[color:var(--foreground)] transition hover:-translate-y-0.5 hover:border-[color:var(--accent)] hover:bg-white;
+  }
+
+  .stat-card {
+    @apply rounded-[22px] border border-[color:var(--line)] bg-white/72 px-4 py-4 shadow-[0_10px_24px_rgba(17,32,51,0.06)];
+  }
+
+  .stat-label {
+    @apply block text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)];
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full bg-white/70 px-3 py-1.5 text-xs font-semibold text-[color:var(--foreground)];
+  }
+
+  .timer-shell {
+    @apply grid h-24 w-24 place-items-center rounded-full p-[6px] shadow-[0_18px_36px_rgba(13,124,102,0.20)];
+  }
+
+  .timer-core {
+    @apply flex h-full w-full flex-col items-center justify-center rounded-full bg-[color:var(--paper)] text-[color:var(--foreground)];
+  }
+
+  .timer-value {
+    @apply text-2xl font-semibold;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .timer-label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.22em] text-[color:var(--muted)];
+  }
+}

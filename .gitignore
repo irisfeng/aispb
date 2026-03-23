@@ -3,3 +3,7 @@ tmp/
 pdf/
 docs/
 memory/
+node_modules/
+.next/
+out/
+tsconfig.tsbuildinfo
