@@ -21,6 +21,7 @@
 - [x] Build the first drill session prototype with timer, prompt actions, and answer flow.
 - [x] Add a lightweight review/statistics section for wrong words and streak feedback.
 - [x] Verify the app builds cleanly and document the result.
+- [x] Add a concise root README for public repo onboarding.
 - [ ] Replace mock session data with canonical word-source adapters.
 - [ ] Implement persistent wrong-word notebook and daily scheduling.
 - [ ] Integrate real pronouncer, dictionary, and coach providers.
@@ -36,3 +37,4 @@
 7. The initial public GitHub sync succeeded with only `.gitignore`, `rules.md`, and `tasks/` tracked; `pdf/`, `docs/`, and `memory/` remain local-only.
 8. The first runnable app scaffold now exists with a refined mobile-first UI, adapter-oriented domain model, and an interactive drill prototype.
 9. Verification completed with `npm run lint`, `npm run typecheck`, `npm run build`, plus local `next dev` HTTP checks returning `200 OK`.
+10. The repo now has a concise public-facing README describing purpose, stack, current scope, and local run commands.
