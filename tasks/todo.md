@@ -9,11 +9,14 @@
 - [x] Expand API evaluation beyond Alibaba Cloud and Volcengine using current official pricing and capability references.
 - [x] Revise the main plan so vendor selection is role-based and includes broader TTS and LLM options.
 - [x] Research whether Merriam-Webster provides official APIs or licensing paths suitable for the app's authoritative dictionary layer.
-- [ ] Initialize local git metadata for the project workspace.
-- [ ] Bind the workspace to `https://github.com/irisfeng/aispb`.
-- [ ] Commit the current planning and process files.
-- [ ] Exclude local-only source and planning directories from git sync.
-- [ ] Push the initial project state to GitHub.
+- [x] Initialize local git metadata for the project workspace.
+- [x] Bind the workspace to `https://github.com/irisfeng/aispb`.
+- [x] Commit the current planning and process files.
+- [x] Exclude local-only source and planning directories from git sync.
+- [x] Push the initial project state to GitHub.
+- [ ] Scaffold the first mobile-first web app implementation.
+- [ ] Define the initial data model and provider adapter interfaces.
+- [ ] Build the first daily drill flow skeleton.
 
 ## Review
 
@@ -23,3 +26,4 @@
 4. API vendor evaluation now includes broader TTS and model options for later implementation decisions.
 5. The implementation plan now treats provider choice as a swappable adapter decision rather than a hard dependency on one cloud vendor.
 6. Merriam-Webster is usable as an official API-backed dictionary source for MVP, but the public API offering does not appear to expose the `Unabridged` product used as the Scripps official reference.
+7. The initial public GitHub sync succeeded with only `.gitignore`, `rules.md`, and `tasks/` tracked; `pdf/`, `docs/`, and `memory/` remain local-only.
