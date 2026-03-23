@@ -7,3 +7,4 @@
 3. When the user broadens supplier scope, the plan should be reframed around provider roles and switching costs instead of comparing only the originally named vendors.
 4. Source PDFs, planning docs, and local memory logs should not be pushed to the public GitHub repo unless the user explicitly asks for that.
 5. A public repo should get a concise README early, once the first runnable scaffold exists.
+6. Public-facing docs should avoid personal names or identifiable details unless the user explicitly wants them included.

@@ -2,7 +2,7 @@
 
 移动端优先的 Spelling Bee 训练 Web App。
 
-当前目标是先服务 `Kaylee` 的初中组备赛，核心体验包括：
+当前先聚焦初中组备赛场景，核心体验包括：
 - 每日抽词训练
 - Bee 风格提示请求：`repeat / definition / sentence / origin`
 - 限时拼写与 `start over` 节奏
@@ -48,7 +48,7 @@ npm run build
 ```text
 src/app/           Next.js app router entry
 src/components/    UI and interaction components
-src/lib/           domain types, mock session data, future adapters
+src/lib/           domain types, word bank, session engine, adapters
 tasks/             working notes required by rules.md
 ```
 
