@@ -38,7 +38,7 @@
 - [x] Validate the current live Volcengine credentials against the pronouncer route.
 - [x] Fix the live auth and product-line mismatch by separating Doubao Speech V3 from the legacy SAMI path.
 - [x] Re-verify pronouncer status, browser fallback, and notebook flow under the current env.
-- [ ] Validate successful live cloud playback once `VOLC_SPEECH_ACCESS_TOKEN` is added.
+- [x] Validate successful live cloud playback once `VOLC_SPEECH_ACCESS_TOKEN` is added.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -64,3 +64,4 @@
 17. Live Volcengine debugging showed that the current console app belongs to the newer Doubao Speech product line, so `AK/SK + GetToken` is the wrong runtime path for this app even though the account credentials themselves are valid.
 18. The pronouncer provider now prefers Doubao Speech V3 with `APP ID + Access Token`, only uses the old SAMI chain when `VOLC_SPEECH_USE_LEGACY=true`, and reports missing `VOLC_SPEECH_ACCESS_TOKEN` as a configuration gap instead of failing with a generic `502`.
 19. Re-verification now includes `GET /api/pronouncer`, `POST /api/pronouncer` under the current env, plus a Playwright smoke flow confirming browser fallback, Definition prompt logging, miss capture, and notebook persistence still work after the provider refactor.
+20. After the app-level `Access Token` was added, live cloud playback succeeded: `/api/pronouncer` returned `200 OK` with `audio/mpeg`, the home screen moved to `volc ready`, and a Playwright click on `Repeat` triggered a real `POST /api/pronouncer 200` in the dev server logs.
