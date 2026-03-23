@@ -1,4 +1,10 @@
-export type DrillPromptKind = "repeat" | "definition" | "sentence" | "origin";
+export type DrillPromptKind =
+  | "repeat"
+  | "definition"
+  | "sentence"
+  | "origin"
+  | "part-of-speech"
+  | "all-info";
 
 export type SubmissionState = "idle" | "correct" | "incorrect" | "timeout";
 export type ProviderRole = "pronouncer" | "dictionary" | "coach";

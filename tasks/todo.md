@@ -44,6 +44,9 @@
 - [x] Preserve `start over` behavior in the spoken-answer flow without relying on keyboard entry.
 - [x] Investigate and fix the odd raspy leading artifact in the current American female pronouncer audio.
 - [x] Re-verify the end-to-end oral drill flow with live pronouncer playback and spoken-answer judging.
+- [x] Separate spoken Bee queries from spoken spelling attempts so prompt requests are never judged as answers.
+- [x] Add a rules-safe pronouncer dialogue agent layer with natural-language intent handling for official Bee-style requests.
+- [x] Refine the mobile session UI around a clean ask/spell flow instead of a dense action grid.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -74,3 +77,6 @@
 22. The answer card now uses spoken-letter capture as the primary interaction, with browser speech recognition, spelled-letter normalization, and an emergency manual fallback only when speech capture is unavailable.
 23. The odd leading pronouncer artifact was traced to the runtime path rather than the word data alone: the app previously auto-played browser speech even when cloud TTS was active, causing overlapping audio; the provider path now auto-plays through one channel only, and V3 output is normalized to `pcm -> wav` with leading low-amplitude noise trimmed.
 24. Re-verification now includes rule research, parser sample checks for spoken-letter normalization, a clean dev-server restart, a fresh Playwright smoke flow for the spoken-answer UI, and live pronouncer checks confirming a single `POST /api/pronouncer 200` on session start plus another on explicit `Repeat`.
+25. The live round now has two distinct interaction lanes: `Ask pronouncer` for Bee-style dialogue and `Spell answer` for oral spelling capture, so spoken requests such as `definition` are no longer eligible for spelling judgment.
+26. The pronouncer layer now behaves like a guarded dialogue agent: it classifies natural-language requests such as repeat, definition, sentence, part of speech, origin, and `all info`, while refusing out-of-bounds spelling-clue requests.
+27. Re-verification for this round included `npm run lint`, `npm run typecheck`, `npm run build`, Playwright browser flow checks for session start plus definition/all-info prompt delivery, and parser assertions confirming `definition` produces no spelling candidate while spoken letters still normalize correctly.

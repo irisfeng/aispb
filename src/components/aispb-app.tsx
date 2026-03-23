@@ -8,11 +8,11 @@ import {
   useState,
 } from "react";
 
+import { localCoachAdapter, providerCards } from "@/lib/local-adapters";
 import {
-  getPromptPreview,
-  localCoachAdapter,
-  providerCards,
-} from "@/lib/local-adapters";
+  buildPronouncerAgentReply,
+  classifyPronouncerAgentIntent,
+} from "@/lib/pronouncer-agent";
 import type {
   DictionaryCuePayload,
   PronouncerStatusPayload,
@@ -56,6 +56,7 @@ type SpeechCaptureState =
   | "processing"
   | "unsupported"
   | "error";
+type VoiceCaptureMode = "ask" | "spell" | null;
 
 interface BrowserSpeechRecognitionAlternative {
   transcript: string;
@@ -107,17 +108,21 @@ interface FeedEntry {
 
 const goalOptions = [5, 10, 20];
 const roundOptions = [60, 90];
-const promptOrder: DrillPromptKind[] = [
+const suggestedPromptOrder: DrillPromptKind[] = [
   "repeat",
   "definition",
+  "part-of-speech",
   "sentence",
   "origin",
+  "all-info",
 ];
 const promptLabels: Record<DrillPromptKind, string> = {
   repeat: "Repeat",
   definition: "Definition",
+  "part-of-speech": "Part of Speech",
   sentence: "Sentence",
   origin: "Origin",
+  "all-info": "All Info",
 };
 const statusCopy: Record<SubmissionState, string> = {
   idle: "Listen first, then spell aloud with clear, distinct letters.",
@@ -184,26 +189,6 @@ function pronounceWithBrowserSpeech(text: string) {
   return true;
 }
 
-function getPromptSpeechText(
-  word: NonNullable<DrillPlan["words"][number]>,
-  promptKind: DrillPromptKind,
-  dictionaryCue: DictionaryCuePayload | null,
-) {
-  if (promptKind === "repeat") {
-    return word.word;
-  }
-
-  if (promptKind === "definition") {
-    return dictionaryCue?.definition ?? word.definition;
-  }
-
-  if (promptKind === "sentence") {
-    return dictionaryCue?.sentence ?? word.sentence;
-  }
-
-  return dictionaryCue?.origin ?? word.origin;
-}
-
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") {
     return null;
@@ -233,11 +218,16 @@ export function AispbApp() {
     defaultSettings.roundDurationSeconds,
   );
   const [attemptDraft, setAttemptDraft] = useState("");
+  const [manualPromptValue, setManualPromptValue] = useState("");
   const [manualFallbackValue, setManualFallbackValue] = useState("");
   const [speechCaptureState, setSpeechCaptureState] =
     useState<SpeechCaptureState>("unsupported");
+  const [voiceCaptureMode, setVoiceCaptureMode] =
+    useState<VoiceCaptureMode>(null);
   const [speechTranscript, setSpeechTranscript] = useState("");
   const [speechInterimTranscript, setSpeechInterimTranscript] = useState("");
+  const [agentTranscript, setAgentTranscript] = useState("");
+  const [spellingTranscript, setSpellingTranscript] = useState("");
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [status, setStatus] = useState<SubmissionState>("idle");
   const [hintsUsed, setHintsUsed] = useState<DrillPromptKind[]>([]);
@@ -258,6 +248,7 @@ export function AispbApp() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const voiceCaptureModeRef = useRef<VoiceCaptureMode>(null);
   const shouldJudgeSpeechOnEndRef = useRef(false);
   const recognitionHadErrorRef = useRef(false);
   const latestSpeechTranscriptRef = useRef("");
@@ -298,12 +289,10 @@ export function AispbApp() {
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
+  const isVoiceBusy =
+    speechCaptureState === "listening" || speechCaptureState === "processing";
   const interactionLocked =
-    !sessionStarted ||
-    sessionComplete ||
-    status !== "idle" ||
-    speechCaptureState === "listening" ||
-    speechCaptureState === "processing";
+    !sessionStarted || sessionComplete || status !== "idle" || isVoiceBusy;
   const timerDegrees =
     (secondsLeft / Math.max(plan.settings.roundDurationSeconds, 1)) * 360;
   const progressPercent =
@@ -317,21 +306,33 @@ export function AispbApp() {
       Math.max(sessionCorrectCount + sessionMissCount, 1)) *
       100,
   );
+  const askTranscriptDisplay =
+    voiceCaptureMode === "ask" ? combinedSpeechTranscript : agentTranscript;
+  const spellingTranscriptDisplay =
+    voiceCaptureMode === "spell"
+      ? combinedSpeechTranscript
+      : spellingTranscript;
   const voiceStatusLabel = hasExternalPronouncer
     ? "volc ready"
     : browserSpeechReady
       ? "browser fallback"
       : "voice unavailable";
-  const speechStatusLabel =
-    speechCaptureState === "listening"
-      ? "listening"
-      : speechCaptureState === "processing"
-        ? "judging"
-        : speechCaptureState === "error"
-          ? "mic issue"
-          : speechCaptureState === "unsupported"
-            ? "manual fallback"
-            : "mic ready";
+  const askStatusLabel =
+    speechCaptureState === "listening" && voiceCaptureMode === "ask"
+      ? "listening to query"
+      : speechCaptureState === "processing" && voiceCaptureMode === "ask"
+        ? "pronouncer replying"
+        : speechCaptureState === "unsupported"
+          ? "manual fallback"
+          : "query ready";
+  const spellStatusLabel =
+    speechCaptureState === "listening" && voiceCaptureMode === "spell"
+      ? "listening to spelling"
+      : speechCaptureState === "processing" && voiceCaptureMode === "spell"
+        ? "judging spelling"
+        : speechCaptureState === "unsupported"
+          ? "manual fallback"
+          : "spell ready";
   const pronouncerDetail = hasExternalPronouncer
     ? `${pronouncerStatus?.detail ?? "Volcengine speech is active."} Browser speech stays available as a local fallback.`
     : pronouncerStatus?.detail
@@ -376,16 +377,40 @@ export function AispbApp() {
     }
   }
 
-  function resetSpeechAttempt() {
+  function resetSpeechAttempt(
+    options: {
+      clearAttemptDraft?: boolean;
+      clearManualFallback?: boolean;
+      clearManualPrompt?: boolean;
+    } = {},
+  ) {
+    const {
+      clearAttemptDraft = true,
+      clearManualFallback = true,
+      clearManualPrompt = true,
+    } = options;
+
     shouldJudgeSpeechOnEndRef.current = false;
     recognitionHadErrorRef.current = false;
+    voiceCaptureModeRef.current = null;
+    setVoiceCaptureMode(null);
     latestSpeechTranscriptRef.current = "";
     latestSpeechInterimTranscriptRef.current = "";
     setSpeechTranscript("");
     setSpeechInterimTranscript("");
     setSpeechError(null);
-    setAttemptDraft("");
-    setManualFallbackValue("");
+
+    if (clearAttemptDraft) {
+      setAttemptDraft("");
+    }
+
+    if (clearManualFallback) {
+      setManualFallbackValue("");
+    }
+
+    if (clearManualPrompt) {
+      setManualPromptValue("");
+    }
   }
 
   async function playPronouncerText(text: string) {
@@ -436,12 +461,17 @@ export function AispbApp() {
     void playPronouncerText(nextWord);
   });
 
-  async function submitAttempt(rawAttempt: string) {
+  async function submitAttempt(
+    rawAttempt: string,
+    options: { allowWholeWordFallback?: boolean } = {},
+  ) {
     if (!currentWord || !sessionStarted || sessionComplete) {
       return;
     }
 
-    const normalizedAttempt = normalizeSpokenSpellingAttempt(rawAttempt);
+    const normalizedAttempt = normalizeSpokenSpellingAttempt(rawAttempt, {
+      allowWholeWordFallback: options.allowWholeWordFallback,
+    });
     const candidate =
       normalizedAttempt.candidate.trim().toLowerCase() ||
       rawAttempt.trim().toLowerCase();
@@ -452,14 +482,25 @@ export function AispbApp() {
     }
 
     if (!candidate) {
+      const intent = classifyPronouncerAgentIntent(rawAttempt);
+      const soundedLikePrompt =
+        intent.kind !== "unknown" &&
+        intent.kind !== "disallowed" &&
+        intent.kind !== "ready-to-spell";
+      const nextError = soundedLikePrompt
+        ? "That sounded like a pronouncer request. Use Ask pronouncer for definition, sentence, origin, or repeat."
+        : "No recognizable letters were captured.";
+
       setSpeechCaptureState(
         speechRecognitionSupported ? "idle" : "unsupported",
       );
-      setSpeechError("No recognizable letters were captured.");
+      setSpeechError(nextError);
       setFeed((previous) => [
         createFeedEntry(
-          "Mic retry",
-          "No recognizable letters were captured. Try again and say each letter distinctly.",
+          soundedLikePrompt ? "Mode guardrail" : "Mic retry",
+          soundedLikePrompt
+            ? "That sounded like a Bee-style prompt request, not a spelling attempt. Ask the pronouncer for it first, then return to Spell."
+            : "No recognizable letters were captured. Try again and say each letter distinctly.",
           "danger",
         ),
         ...previous,
@@ -495,14 +536,14 @@ export function AispbApp() {
 
       window.setTimeout(() => {
         advanceWord();
-      }, 850);
+      }, 1650);
       return;
     }
 
     await registerMiss("incorrect", candidate);
   }
 
-  function startSpeechCapture() {
+  function startSpeechCapture(mode: VoiceCaptureMode) {
     if (!sessionStarted || sessionComplete || status !== "idle") {
       return;
     }
@@ -561,12 +602,25 @@ export function AispbApp() {
           latestSpeechInterimTranscriptRef.current = interimChunks
             .join(" ")
             .trim();
+          const combinedTranscript = [nextTranscript, interimChunks.join(" ")]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
 
-          const normalized = normalizeSpokenSpellingAttempt(
-            [nextTranscript, interimChunks.join(" ")].filter(Boolean).join(" "),
-          );
+          if (voiceCaptureModeRef.current === "ask") {
+            setAgentTranscript(combinedTranscript);
+          }
 
-          setAttemptDraft(normalized.candidate);
+          if (voiceCaptureModeRef.current === "spell") {
+            setSpellingTranscript(combinedTranscript);
+          }
+
+          if (voiceCaptureModeRef.current === "spell") {
+            const normalized =
+              normalizeSpokenSpellingAttempt(combinedTranscript);
+
+            setAttemptDraft(normalized.candidate);
+          }
 
           return nextTranscript;
         });
@@ -595,7 +649,20 @@ export function AispbApp() {
           shouldJudgeSpeechOnEndRef.current = false;
           setSpeechCaptureState("processing");
           setSpeechInterimTranscript("");
+          const modeToHandle = voiceCaptureModeRef.current;
+
+          if (modeToHandle === "ask") {
+            void handlePronouncerDialogue(transcriptToJudge).finally(() => {
+              voiceCaptureModeRef.current = null;
+              setVoiceCaptureMode(null);
+              setSpeechCaptureState("idle");
+            });
+            return;
+          }
+
           void submitAttempt(transcriptToJudge).finally(() => {
+            voiceCaptureModeRef.current = null;
+            setVoiceCaptureMode(null);
             setSpeechCaptureState("idle");
           });
           return;
@@ -605,13 +672,25 @@ export function AispbApp() {
           return;
         }
 
+        voiceCaptureModeRef.current = null;
+        setVoiceCaptureMode(null);
         setSpeechCaptureState("idle");
       };
 
       recognitionRef.current = nextRecognition;
     }
 
-    resetSpeechAttempt();
+    resetSpeechAttempt({
+      clearAttemptDraft: mode === "spell",
+      clearManualFallback: mode === "spell",
+    });
+    if (mode === "ask") {
+      setAgentTranscript("");
+    } else {
+      setSpellingTranscript("");
+    }
+    voiceCaptureModeRef.current = mode;
+    setVoiceCaptureMode(mode);
 
     try {
       recognitionRef.current.start();
@@ -622,7 +701,7 @@ export function AispbApp() {
     }
   }
 
-  function stopSpeechCaptureAndJudge() {
+  function stopSpeechCaptureAndHandle() {
     if (!recognitionRef.current || speechCaptureState !== "listening") {
       return;
     }
@@ -754,6 +833,8 @@ export function AispbApp() {
     setCurrentIndex(0);
     setSecondsLeft(nextPlan.settings.roundDurationSeconds);
     resetSpeechAttempt();
+    setAgentTranscript("");
+    setSpellingTranscript("");
     setStatus("idle");
     setHintsUsed([]);
     setRestartCount(0);
@@ -797,6 +878,8 @@ export function AispbApp() {
       setCurrentIndex((previous) => previous + 1);
       setSecondsLeft(activePlan.settings.roundDurationSeconds);
       resetSpeechAttempt();
+      setAgentTranscript("");
+      setSpellingTranscript("");
       setStatus("idle");
       setHintsUsed([]);
       setRestartCount(0);
@@ -851,7 +934,7 @@ export function AispbApp() {
 
     window.setTimeout(() => {
       advanceWord();
-    }, 950);
+    }, 1900);
   }
 
   const tick = useEffectEvent(() => {
@@ -877,46 +960,94 @@ export function AispbApp() {
     return () => window.clearInterval(intervalId);
   }, [sessionComplete, sessionStarted]);
 
-  async function openPrompt(kind: DrillPromptKind) {
+  async function deliverPronouncerIntent(
+    intentKind: ReturnType<typeof classifyPronouncerAgentIntent>["kind"],
+  ) {
     if (!currentWord || !sessionStarted || sessionComplete) {
       return;
     }
 
-    let displayText = getPromptPreview(currentWord, "repeat");
-    let dictionaryCue: DictionaryCuePayload | null = null;
+    const shouldResolveDictionaryCue =
+      intentKind === "definition" ||
+      intentKind === "sentence" ||
+      intentKind === "origin" ||
+      intentKind === "part-of-speech" ||
+      intentKind === "all-info";
+    const dictionaryCue = shouldResolveDictionaryCue
+      ? await resolveDictionaryCue()
+      : null;
+    const reply = buildPronouncerAgentReply({
+      intent: {
+        kind: intentKind,
+        transcript: intentKind,
+      },
+      word: currentWord,
+      cue: dictionaryCue,
+    });
     let pronouncerProvider: string | null = null;
 
-    if (kind !== "repeat") {
-      dictionaryCue = await resolveDictionaryCue();
-      displayText =
-        kind === "definition"
-          ? dictionaryCue.definition
-          : kind === "sentence"
-            ? dictionaryCue.sentence
-            : dictionaryCue.origin;
-    } else {
-      displayText = getPromptPreview(currentWord, kind);
+    if (settings.pronouncerEnabled && reply.speechText) {
+      pronouncerProvider = await playPronouncerText(reply.speechText);
     }
 
-    if (settings.pronouncerEnabled) {
-      pronouncerProvider = await playPronouncerText(
-        getPromptSpeechText(currentWord, kind, dictionaryCue),
+    const promptKind = reply.promptKind;
+
+    if (promptKind) {
+      setHintsUsed((previous) =>
+        previous.includes(promptKind) ? previous : [...previous, promptKind],
       );
     }
 
-    setHintsUsed((previous) =>
-      previous.includes(kind) ? previous : [...previous, kind],
-    );
     setFeed((previous) => [
       createFeedEntry(
-        kind === "repeat"
-          ? `${promptLabels[kind]} · ${pronouncerProvider ?? "text only"}`
-          : `${promptLabels[kind]} · ${dictionaryCue?.provider ?? "dictionary"}`,
-        displayText,
-        kind === "repeat" ? "system" : "hint",
+        pronouncerProvider
+          ? `${reply.label} · ${pronouncerProvider}`
+          : reply.label,
+        reply.displayText,
+        reply.tone,
       ),
       ...previous,
     ]);
+  }
+
+  async function requestPronouncerPrompt(kind: DrillPromptKind) {
+    setAgentTranscript(promptLabels[kind]);
+    setFeed((previous) => [
+      createFeedEntry("You asked", promptLabels[kind], "system"),
+      ...previous,
+    ]);
+    await deliverPronouncerIntent(kind);
+  }
+
+  async function handlePronouncerDialogue(rawTranscript: string) {
+    if (!currentWord || !sessionStarted || sessionComplete) {
+      return;
+    }
+
+    const trimmedTranscript = rawTranscript.trim();
+
+    if (!trimmedTranscript) {
+      setSpeechError("No clear prompt request was captured.");
+      setFeed((previous) => [
+        createFeedEntry(
+          "Pronouncer",
+          "No clear request was captured. Ask for a repeat, definition, sentence, part of speech, or origin.",
+          "danger",
+        ),
+        ...previous,
+      ]);
+      return;
+    }
+
+    setAgentTranscript(trimmedTranscript);
+    const intent = classifyPronouncerAgentIntent(trimmedTranscript);
+
+    setFeed((previous) => [
+      createFeedEntry("You asked", trimmedTranscript, "system"),
+      ...previous,
+    ]);
+
+    await deliverPronouncerIntent(intent.kind);
   }
 
   function handleStartOver() {
@@ -929,6 +1060,7 @@ export function AispbApp() {
     setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
     setRestartCount((previous) => previous + 1);
     resetSpeechAttempt();
+    setSpellingTranscript("");
     setFeed((previous) => [
       createFeedEntry(
         "Start over",
@@ -1191,139 +1323,265 @@ export function AispbApp() {
             </p>
           </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {promptOrder.map((prompt) => (
-              <button
-                key={prompt}
-                className="action-button"
-                disabled={interactionLocked}
-                onClick={() => {
-                  void openPrompt(prompt);
-                }}
-                type="button"
-              >
-                {promptLabels[prompt]}
-              </button>
-            ))}
-            <button
-              className="action-button col-span-2 sm:col-span-5"
-              disabled={!sessionStarted || sessionComplete || status !== "idle"}
-              onClick={handleStartOver}
-              type="button"
-            >
-              Start Over
-            </button>
-          </div>
+          <div className="mt-5 grid gap-4 xl:grid-cols-[0.96fr_1.04fr]">
+            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Pronouncer Agent</p>
+                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                    Ask natural Bee-style questions in plain English. The
+                    pronouncer stays inside the official lane and never treats a
+                    request as a spelling attempt.
+                  </p>
+                </div>
+                <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                  {askStatusLabel}
+                </span>
+              </div>
 
-          <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="eyebrow">Spell Aloud</p>
-                <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                  Say each letter distinctly, then tap stop so the app can judge
-                  the attempt like an oral round.
+              <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Last request
+                </p>
+                <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
+                  {askTranscriptDisplay ||
+                    "Try “definition”, “use it in a sentence”, “part of speech”, or “say it again.”"}
                 </p>
               </div>
-              <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                {speechStatusLabel}
-              </span>
-            </div>
 
-            <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                Live transcript
-              </p>
-              <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
-                {combinedSpeechTranscript ||
-                  "No speech captured yet. Tap start and spell the letters aloud."}
-              </p>
-            </div>
+              {speechError && voiceCaptureMode === "ask" ? (
+                <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
+                  {speechError}
+                </p>
+              ) : null}
 
-            <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                Locked letters
-              </p>
-              <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
-                {formatSpellingCandidate(attemptDraft)}
-              </p>
-            </div>
-
-            {speechError ? (
-              <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
-                {speechError}
-              </p>
-            ) : null}
-
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-              <button
-                className="primary-button justify-center"
-                disabled={
-                  !sessionStarted ||
-                  sessionComplete ||
-                  status !== "idle" ||
-                  speechCaptureState === "listening" ||
-                  speechCaptureState === "processing"
-                }
-                onClick={startSpeechCapture}
-                type="button"
-              >
-                Start speaking
-              </button>
-              <button
-                className="secondary-button justify-center"
-                disabled={speechCaptureState !== "listening"}
-                onClick={stopSpeechCaptureAndJudge}
-                type="button"
-              >
-                Stop and judge
-              </button>
-            </div>
-
-            {shouldShowManualFallback ? (
-              <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
-                <label className="eyebrow" htmlFor="manual-spelling-fallback">
-                  Manual Fallback
-                </label>
-                <input
-                  className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
-                  id="manual-spelling-fallback"
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    setManualFallbackValue(nextValue);
-                    setAttemptDraft(
-                      normalizeSpokenSpellingAttempt(nextValue).candidate,
-                    );
-                  }}
-                  placeholder="temporary fallback if mic recognition is unavailable"
-                  spellCheck={false}
-                  type="text"
-                  value={manualFallbackValue}
-                />
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                 <button
-                  className="secondary-button mt-3 justify-center"
-                  disabled={
-                    !sessionStarted ||
-                    sessionComplete ||
-                    status !== "idle" ||
-                    !manualFallbackValue.trim()
-                  }
+                  className="primary-button justify-center"
+                  disabled={interactionLocked}
                   onClick={() => {
-                    void submitAttempt(manualFallbackValue);
+                    startSpeechCapture("ask");
                   }}
                   type="button"
                 >
-                  Judge fallback attempt
+                  Ask pronouncer
+                </button>
+                <button
+                  className="secondary-button justify-center"
+                  disabled={speechCaptureState !== "listening"}
+                  onClick={stopSpeechCaptureAndHandle}
+                  type="button"
+                >
+                  Stop listening
                 </button>
               </div>
-            ) : null}
 
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm leading-6 text-[color:var(--muted)]">
-                {statusCopy[status]}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {suggestedPromptOrder.map((prompt) => (
+                  <button
+                    key={prompt}
+                    className="action-button min-h-10 rounded-full px-4 py-2"
+                    disabled={interactionLocked}
+                    onClick={() => {
+                      void requestPronouncerPrompt(prompt);
+                    }}
+                    type="button"
+                  >
+                    {promptLabels[prompt]}
+                  </button>
+                ))}
+              </div>
+
+              {shouldShowManualFallback ? (
+                <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                  <label className="eyebrow" htmlFor="manual-prompt-fallback">
+                    Prompt fallback
+                  </label>
+                  <input
+                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                    id="manual-prompt-fallback"
+                    onChange={(event) => {
+                      setManualPromptValue(event.target.value);
+                    }}
+                    placeholder="definition / part of speech / use it in a sentence"
+                    spellCheck={false}
+                    type="text"
+                    value={manualPromptValue}
+                  />
+                  <button
+                    className="secondary-button mt-3 justify-center"
+                    disabled={
+                      !sessionStarted ||
+                      sessionComplete ||
+                      status !== "idle" ||
+                      !manualPromptValue.trim()
+                    }
+                    onClick={() => {
+                      void handlePronouncerDialogue(manualPromptValue).finally(
+                        () => {
+                          setManualPromptValue("");
+                        },
+                      );
+                    }}
+                    type="button"
+                  >
+                    Send prompt
+                  </button>
+                </div>
+              ) : null}
+
+              <p className="mt-4 text-xs leading-5 text-[color:var(--muted)]">
+                Allowed requests: repeat, definition, part of speech, sentence,
+                origin, or all information. Spelling clues stay blocked.
               </p>
-              <p className="text-xs leading-5 text-[color:var(--muted)]">
-                Say “start over” or tap the reset button to clear the capture.
-              </p>
+            </div>
+
+            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Spell Answer</p>
+                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                    When you are ready, spell the letters aloud. The app judges
+                    only the oral spelling attempt and reveals the word card
+                    after the round resolves.
+                  </p>
+                </div>
+                <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                  {spellStatusLabel}
+                </span>
+              </div>
+
+              <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Spelling transcript
+                </p>
+                <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
+                  {spellingTranscriptDisplay ||
+                    "No spelling captured yet. Tap Spell answer and say each letter distinctly."}
+                </p>
+              </div>
+
+              <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Locked letters
+                </p>
+                <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
+                  {formatSpellingCandidate(attemptDraft)}
+                </p>
+              </div>
+
+              {status !== "idle" && currentWord ? (
+                <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--accent-soft)]/70 px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                    Round reveal
+                  </p>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)]">
+                      {currentWord.word}
+                    </p>
+                    <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                      {status === "correct"
+                        ? "correct"
+                        : status === "timeout"
+                          ? "timed out"
+                          : "miss"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                    {currentWord.pronunciationNote}
+                  </p>
+                </div>
+              ) : null}
+
+              {speechError && voiceCaptureMode !== "ask" ? (
+                <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
+                  {speechError}
+                </p>
+              ) : null}
+
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <button
+                  className="primary-button justify-center"
+                  disabled={interactionLocked}
+                  onClick={() => {
+                    startSpeechCapture("spell");
+                  }}
+                  type="button"
+                >
+                  Spell answer
+                </button>
+                <button
+                  className="secondary-button justify-center"
+                  disabled={speechCaptureState !== "listening"}
+                  onClick={stopSpeechCaptureAndHandle}
+                  type="button"
+                >
+                  Stop and judge
+                </button>
+                <button
+                  className="secondary-button justify-center"
+                  disabled={
+                    !sessionStarted || sessionComplete || status !== "idle"
+                  }
+                  onClick={handleStartOver}
+                  type="button"
+                >
+                  Start Over
+                </button>
+              </div>
+
+              {shouldShowManualFallback ? (
+                <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                  <label className="eyebrow" htmlFor="manual-spelling-fallback">
+                    Spelling fallback
+                  </label>
+                  <input
+                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                    id="manual-spelling-fallback"
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setManualFallbackValue(nextValue);
+                      setSpellingTranscript(nextValue);
+                      setAttemptDraft(
+                        normalizeSpokenSpellingAttempt(nextValue, {
+                          allowWholeWordFallback: true,
+                        }).candidate,
+                      );
+                    }}
+                    placeholder="A U S P I C I O U S"
+                    spellCheck={false}
+                    type="text"
+                    value={manualFallbackValue}
+                  />
+                  <button
+                    className="secondary-button mt-3 justify-center"
+                    disabled={
+                      !sessionStarted ||
+                      sessionComplete ||
+                      status !== "idle" ||
+                      !manualFallbackValue.trim()
+                    }
+                    onClick={() => {
+                      void submitAttempt(manualFallbackValue, {
+                        allowWholeWordFallback: true,
+                      });
+                    }}
+                    type="button"
+                  >
+                    Judge fallback attempt
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm leading-6 text-[color:var(--muted)]">
+                  {statusCopy[status]}
+                </p>
+                <p className="text-xs leading-5 text-[color:var(--muted)]">
+                  If you need another clue, switch back to Ask pronouncer
+                  instead of saying it in spell mode.
+                </p>
+              </div>
             </div>
           </div>
         </div>

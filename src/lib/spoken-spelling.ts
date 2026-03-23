@@ -6,6 +6,10 @@ export interface NormalizedSpokenAttempt {
   transcript: string;
 }
 
+interface NormalizeSpokenAttemptOptions {
+  allowWholeWordFallback?: boolean;
+}
+
 const fillerTokens = new Set([
   "and",
   "comma",
@@ -206,6 +210,7 @@ function pushLetterCandidate(
 
 export function normalizeSpokenSpellingAttempt(
   transcript: string,
+  options: NormalizeSpokenAttemptOptions = {},
 ): NormalizedSpokenAttempt {
   const normalizedTranscript = normalizeTranscriptText(transcript);
   const tokens = tokenizeTranscript(transcript);
@@ -231,7 +236,11 @@ export function normalizeSpokenSpellingAttempt(
     index += 1;
   }
 
-  if (!candidate && /^[a-z]+(?: [a-z]+)*$/.test(normalizedTranscript)) {
+  if (
+    options.allowWholeWordFallback &&
+    !candidate &&
+    /^[a-z]+(?: [a-z]+)*$/.test(normalizedTranscript)
+  ) {
     candidate = normalizedTranscript.replaceAll(" ", "");
   }
 

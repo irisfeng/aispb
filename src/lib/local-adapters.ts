@@ -74,7 +74,13 @@ export const providerCards: ProviderCard[] = [
 
 export function getPromptPreview(
   word: DrillWord,
-  promptKind: "repeat" | "definition" | "sentence" | "origin",
+  promptKind:
+    | "repeat"
+    | "definition"
+    | "sentence"
+    | "origin"
+    | "part-of-speech"
+    | "all-info",
 ) {
   if (promptKind === "repeat") {
     return `Pronouncer repeats the word. ${word.pronunciationNote}`;
@@ -86,6 +92,14 @@ export function getPromptPreview(
 
   if (promptKind === "sentence") {
     return word.sentence;
+  }
+
+  if (promptKind === "part-of-speech") {
+    return "Part of speech is available from the dictionary provider when configured.";
+  }
+
+  if (promptKind === "all-info") {
+    return `${word.definition} ${word.origin}`;
   }
 
   return word.origin;
