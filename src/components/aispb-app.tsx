@@ -5,10 +5,11 @@ import { startTransition, useEffect, useEffectEvent, useState } from "react";
 import {
   getPromptPreview,
   localCoachAdapter,
-  localDictionaryAdapter,
   localPronouncerAdapter,
   providerCards,
 } from "@/lib/local-adapters";
+import type { DictionaryCuePayload } from "@/lib/provider-client";
+import { fetchDictionaryCue } from "@/lib/provider-client";
 import {
   applyDrillResult,
   createDrillPlan,
@@ -140,6 +141,9 @@ export function AispbApp() {
   const [sessionCorrectCount, setSessionCorrectCount] = useState(0);
   const [sessionMissCount, setSessionMissCount] = useState(0);
   const [speechReady, setSpeechReady] = useState(false);
+  const [dictionaryCache, setDictionaryCache] = useState<
+    Record<string, DictionaryCuePayload>
+  >({});
   const [feed, setFeed] = useState<FeedEntry[]>([
     {
       id: "feed-initial",
@@ -161,6 +165,9 @@ export function AispbApp() {
     progress,
     todayKey,
   });
+  const currentDictionaryCue = currentWord
+    ? dictionaryCache[currentWord.id]
+    : null;
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
@@ -248,6 +255,27 @@ export function AispbApp() {
 
       return nextSettings;
     });
+  }
+
+  async function resolveDictionaryCue() {
+    if (!currentWord) {
+      throw new Error("No active word available.");
+    }
+
+    const cached = dictionaryCache[currentWord.id];
+
+    if (cached) {
+      return cached;
+    }
+
+    const nextCue = await fetchDictionaryCue(currentWord);
+
+    setDictionaryCache((previous) => ({
+      ...previous,
+      [currentWord.id]: nextCue,
+    }));
+
+    return nextCue;
   }
 
   function beginSession() {
@@ -382,14 +410,20 @@ export function AispbApp() {
       return;
     }
 
-    const displayText =
-      kind === "repeat"
-        ? getPromptPreview(currentWord, kind)
-        : kind === "definition"
-          ? await localDictionaryAdapter.getDefinition(currentWord)
+    let displayText = getPromptPreview(currentWord, "repeat");
+    let dictionaryCue: DictionaryCuePayload | null = null;
+
+    if (kind !== "repeat") {
+      dictionaryCue = await resolveDictionaryCue();
+      displayText =
+        kind === "definition"
+          ? dictionaryCue.definition
           : kind === "sentence"
-            ? await localDictionaryAdapter.getSentence(currentWord)
-            : await localDictionaryAdapter.getOrigin(currentWord);
+            ? dictionaryCue.sentence
+            : dictionaryCue.origin;
+    } else {
+      displayText = getPromptPreview(currentWord, kind);
+    }
 
     if (kind === "repeat" && settings.pronouncerEnabled) {
       const spokenText = await localPronouncerAdapter.getSpokenText(
@@ -404,7 +438,9 @@ export function AispbApp() {
     );
     setFeed((previous) => [
       createFeedEntry(
-        promptLabels[kind],
+        kind === "repeat"
+          ? promptLabels[kind]
+          : `${promptLabels[kind]} · ${dictionaryCue?.provider ?? "dictionary"}`,
         displayText,
         kind === "repeat" ? "system" : "hint",
       ),
@@ -522,8 +558,8 @@ export function AispbApp() {
 
           <p className="mt-5 max-w-xl text-sm leading-7 text-[color:var(--muted)] sm:text-base">
             The scaffold now generates a daily plan from a seeded word bank,
-            keeps a browser-side notebook, and re-injects missed words into
-            future sessions before any external API is wired.
+            keeps a browser-side notebook, and can switch dictionary lookups to
+            Merriam-Webster whenever an API key is configured.
           </p>
 
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -636,7 +672,7 @@ export function AispbApp() {
           <div className="flex items-center justify-between">
             <p className="eyebrow">Adapters</p>
             <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-              swappable
+              {currentDictionaryCue?.provider ?? "auto fallback"}
             </span>
           </div>
 

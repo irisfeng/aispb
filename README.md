@@ -24,15 +24,29 @@
 - 回合原型：计时器、提示按钮、拼写输入、反馈流
 - 浏览器端错词本与进度持久化
 - 浏览器 speech synthesis pronouncer fallback
+- 环境变量驱动的 Merriam-Webster 词典通道，未配置时自动回退到本地 seed 数据
 - provider adapter 结构，便于后续接入真实服务
 
-当前仍未接入真实外部服务，`Merriam-Webster`、正式 TTS、云端存储还在后续阶段。
+当前仍未接入正式 pronouncer TTS、云端存储和生产级 coach provider。
 
 ## Local Run
 
 ```bash
 npm install
 npm run dev
+```
+
+如需启用真实 Merriam-Webster 词典查询：
+
+```bash
+cp .env.example .env.local
+```
+
+然后填写：
+
+```bash
+MW_DICTIONARY_API_KEY=your_key_here
+MW_DICTIONARY_TYPE=collegiate
 ```
 
 常用命令：
@@ -55,6 +69,6 @@ tasks/             working notes required by rules.md
 ## Next
 
 1. 用真实词源替换 mock session 数据。
-2. 接入 `Merriam-Webster` 词典 adapter。
-3. 接入正式 pronouncer TTS 和音频缓存。
+2. 接入正式 pronouncer TTS 和音频缓存。
+3. 接入生产级 coach provider。
 4. 把浏览器端 notebook 升级为可同步的持久化数据层。

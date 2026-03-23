@@ -59,7 +59,7 @@ export const providerCards: ProviderCard[] = [
     label: "Dictionary Adapter",
     role: "dictionary",
     detail:
-      "Seed dictionary data is local today. Merriam-Webster API can replace this adapter without rewriting the UI.",
+      "Dictionary access now routes through a provider layer: Merriam-Webster when configured, local seed fallback otherwise.",
     status: "ready",
   },
   {
@@ -72,7 +72,10 @@ export const providerCards: ProviderCard[] = [
   },
 ];
 
-export function getPromptPreview(word: DrillWord, promptKind: "repeat" | "definition" | "sentence" | "origin") {
+export function getPromptPreview(
+  word: DrillWord,
+  promptKind: "repeat" | "definition" | "sentence" | "origin",
+) {
   if (promptKind === "repeat") {
     return `Pronouncer repeats the word. ${word.pronunciationNote}`;
   }

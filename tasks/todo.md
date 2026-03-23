@@ -27,7 +27,10 @@
 - [x] Implement persistent wrong-word notebook and progress storage in the browser.
 - [x] Add a browser-based pronouncer fallback for the local MVP.
 - [x] Verify the upgraded local MVP with lint, typecheck, and build.
-- [ ] Integrate real pronouncer, dictionary, and coach providers.
+- [x] Add environment-aware Merriam-Webster dictionary integration with local fallback.
+- [x] Route dictionary access through a provider layer instead of direct local adapter calls.
+- [x] Add a documented env template for real provider credentials.
+- [ ] Integrate real pronouncer and coach providers.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
 
@@ -44,3 +47,5 @@
 9. Verification completed with `npm run lint`, `npm run typecheck`, `npm run build`, plus local `next dev` HTTP checks returning `200 OK`.
 10. The repo now has a concise public-facing README describing purpose, stack, current scope, and local run commands.
 11. The app now behaves as a true local MVP: seeded word bank, configurable daily planning, browser-side notebook persistence, and browser speech fallback are all wired.
+12. Dictionary lookups now go through a real provider seam: a Next API route uses Merriam-Webster when `MW_DICTIONARY_API_KEY` is configured and falls back to local seed data otherwise.
+13. Verification now also includes a local HTTP check for `/api/dictionary?word=verdant`, which currently returns the local fallback payload when no API key is present.
