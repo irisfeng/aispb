@@ -13,7 +13,9 @@ export interface DictionaryCuePayload {
 
 export interface PronouncerStatusPayload {
   configured: boolean;
+  detail: string;
   provider: string;
+  mode: "v3" | "legacy" | "unconfigured";
   speaker: string | null;
   format: string | null;
 }
@@ -67,7 +69,24 @@ export async function fetchPronouncerAudio(
   });
 
   if (!response.ok) {
-    throw new Error(`Pronouncer request failed with ${response.status}`);
+    let detail = "";
+
+    try {
+      const errorPayload = (await response.json()) as {
+        detail?: string | null;
+        error?: string;
+      };
+
+      detail = errorPayload.detail
+        ? `${errorPayload.error ?? "Pronouncer request failed."} ${errorPayload.detail}`.trim()
+        : (errorPayload.error ?? "");
+    } catch {
+      detail = "";
+    }
+
+    throw new Error(
+      detail || `Pronouncer request failed with ${response.status}`,
+    );
   }
 
   const durationHeader = response.headers.get("x-aispb-duration-seconds");
@@ -79,7 +98,8 @@ export async function fetchPronouncerAudio(
   return {
     blob: await response.blob(),
     provider:
-      response.headers.get("x-aispb-provider") ?? "Volcengine short-text TTS",
+      response.headers.get("x-aispb-provider") ??
+      "Volcengine Doubao Speech TTS V3",
     speaker: response.headers.get("x-aispb-speaker"),
     durationSeconds,
   };

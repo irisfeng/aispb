@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  getPronouncerErrorPayload,
   getPronouncerProviderStatus,
   hasVolcengineSpeechConfig,
   synthesizeWithVolcengineSpeech,
@@ -38,8 +39,13 @@ export async function POST(request: Request) {
   }
 
   if (!hasVolcengineSpeechConfig()) {
+    const status = getPronouncerProviderStatus();
+
     return NextResponse.json(
-      { error: "Pronouncer provider is not configured." },
+      {
+        detail: status.detail,
+        error: "Pronouncer provider is not configured.",
+      },
       { status: 503 },
     );
   }
@@ -61,9 +67,14 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("pronouncer synthesis failed", error);
 
+    const errorPayload = getPronouncerErrorPayload(error);
+
     return NextResponse.json(
-      { error: "Pronouncer synthesis failed." },
-      { status: 502 },
+      {
+        detail: errorPayload.detail,
+        error: errorPayload.error,
+      },
+      { status: errorPayload.statusCode },
     );
   }
 }

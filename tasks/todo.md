@@ -31,10 +31,14 @@
 - [x] Route dictionary access through a provider layer instead of direct local adapter calls.
 - [x] Add a documented env template for real provider credentials.
 - [x] Integrate a real pronouncer provider through a server-side adapter.
-- [x] Add Volcengine short-text TTS token management and audio invoke flow.
+- [x] Add the first Volcengine pronouncer token and audio invoke flow.
 - [x] Route pronouncer playback through the provider layer with browser speech fallback.
 - [x] Expose pronouncer provider status in the mobile UI.
 - [x] Verify pronouncer integration with lint, typecheck, build, and local HTTP checks.
+- [x] Validate the current live Volcengine credentials against the pronouncer route.
+- [x] Fix the live auth and product-line mismatch by separating Doubao Speech V3 from the legacy SAMI path.
+- [x] Re-verify pronouncer status, browser fallback, and notebook flow under the current env.
+- [ ] Validate successful live cloud playback once `VOLC_SPEECH_ACCESS_TOKEN` is added.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -54,6 +58,9 @@
 11. The app now behaves as a true local MVP: seeded word bank, configurable daily planning, browser-side notebook persistence, and browser speech fallback are all wired.
 12. Dictionary lookups now go through a real provider seam: a Next API route uses Merriam-Webster when `MW_DICTIONARY_API_KEY` is configured and falls back to local seed data otherwise.
 13. Verification now also includes a local HTTP check for `/api/dictionary?word=verdant`, which currently returns the local fallback payload when no API key is present.
-14. Pronouncer playback now has a server-side path: `/api/pronouncer` reports provider status and synthesizes audio through Volcengine short-text TTS when credentials are configured.
+14. Pronouncer playback now has a server-side path: `/api/pronouncer` reports provider status and synthesizes audio through the active Volcengine provider path when credentials are configured.
 15. The mobile UI now surfaces pronouncer status, prefers the cloud provider for explicit prompt requests, and falls back to browser speech when external credentials are absent.
 16. Verification for the pronouncer path now includes `npm run lint`, `npm run typecheck`, `npm run build`, local HTTP checks for `/api/pronouncer`, and a Playwright smoke flow covering session start, prompt buttons, and notebook updates.
+17. Live Volcengine debugging showed that the current console app belongs to the newer Doubao Speech product line, so `AK/SK + GetToken` is the wrong runtime path for this app even though the account credentials themselves are valid.
+18. The pronouncer provider now prefers Doubao Speech V3 with `APP ID + Access Token`, only uses the old SAMI chain when `VOLC_SPEECH_USE_LEGACY=true`, and reports missing `VOLC_SPEECH_ACCESS_TOKEN` as a configuration gap instead of failing with a generic `502`.
+19. Re-verification now includes `GET /api/pronouncer`, `POST /api/pronouncer` under the current env, plus a Playwright smoke flow confirming browser fallback, Definition prompt logging, miss capture, and notebook persistence still work after the provider refactor.

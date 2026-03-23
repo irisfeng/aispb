@@ -233,16 +233,18 @@ export function AispbApp() {
       ? "browser fallback"
       : "voice unavailable";
   const pronouncerDetail = hasExternalPronouncer
-    ? `Volcengine short-text TTS is active with speaker ${pronouncerStatus?.speaker ?? "default"}. Browser speech stays available as a local fallback.`
-    : browserSpeechReady
-      ? "External TTS is not configured yet. Browser speech is carrying local playback for drills and prompt repeats."
-      : "No active audio channel is available yet. Add Volcengine speech credentials or use a browser with speech synthesis support.";
+    ? `${pronouncerStatus?.detail ?? "Volcengine speech is active."} Browser speech stays available as a local fallback.`
+    : pronouncerStatus?.detail
+      ? `${pronouncerStatus.detail} Browser speech will cover local playback until cloud audio is ready.`
+      : browserSpeechReady
+        ? "External TTS is not configured yet. Browser speech is carrying local playback for drills and prompt repeats."
+        : "No active audio channel is available yet. Add Volcengine speech credentials or use a browser with speech synthesis support.";
   const adapterBadge = lastPronouncerProvider
     ? lastPronouncerProvider
     : currentDictionaryCue?.provider
       ? currentDictionaryCue.provider
       : hasExternalPronouncer
-        ? (pronouncerStatus?.provider ?? "Volcengine short-text TTS")
+        ? (pronouncerStatus?.provider ?? "Volcengine Doubao Speech TTS V3")
         : browserSpeechReady
           ? "Browser speech fallback"
           : "auto fallback";
@@ -706,7 +708,7 @@ export function AispbApp() {
             The app now generates a daily plan from a seeded word bank, keeps a
             browser-side notebook, routes dictionary requests through
             Merriam-Webster when configured, and can switch the pronouncer to
-            Volcengine short-text TTS.
+            Volcengine Doubao Speech TTS.
           </p>
 
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
