@@ -10,3 +10,4 @@
 6. Public-facing docs should avoid personal names or identifiable details unless the user explicitly wants them included.
 7. Once the user says to keep shipping and the implementation path is already clear, move directly into code and verification instead of pausing at recommendation-only updates.
 8. Live cloud integrations need to be matched against the exact current console product line before documenting env variables, speaker IDs, or auth flow; older Volcengine SAMI assumptions do not safely apply to a Doubao Speech 2.0 app.
+9. For Volcengine speech, auth docs and voice-list docs are separate sources; speaker defaults must be validated against the official voice list page, not inferred from integration examples.
