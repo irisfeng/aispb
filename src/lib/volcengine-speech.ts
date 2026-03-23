@@ -14,11 +14,16 @@ const LEGACY_PROVIDER_LABEL = "Volcengine SAMI short-text TTS";
 const V3_PROVIDER_LABEL = "Volcengine Doubao Speech TTS V3";
 const DEFAULT_LEGACY_SPEAKER = "en_female_samc";
 const DEFAULT_V3_SPEAKER = "en_female_dacey_uranus_bigtts";
-const DEFAULT_AUDIO_FORMAT = "mp3";
+const DEFAULT_LEGACY_AUDIO_FORMAT = "mp3";
+const DEFAULT_V3_AUDIO_FORMAT = "pcm";
 const DEFAULT_SAMPLE_RATE = 24_000;
 const DEFAULT_TOKEN_TTL_SECONDS = 3_600;
 const DEFAULT_V3_RESOURCE_ID = "seed-tts-2.0";
 const TOKEN_REFRESH_BUFFER_SECONDS = 90;
+const V3_AUDIO_EVENT_ID = "352";
+const PCM_BYTES_PER_SAMPLE = 2;
+const PCM_SILENCE_THRESHOLD = 96;
+const PCM_TRIM_BACKTRACK_SAMPLES = 240;
 
 type PronouncerProviderMode = "v3" | "legacy" | "unconfigured";
 
@@ -134,6 +139,9 @@ function getNumberEnvValue(key: string, fallback: number) {
 }
 
 function getVolcSpeechConfig(): VolcSpeechConfig {
+  const useLegacy = getBooleanEnvValue("VOLC_SPEECH_USE_LEGACY");
+  const requestedAudioFormat = getEnvValue("VOLC_SPEECH_AUDIO_FORMAT");
+
   return {
     accessKeyId: getEnvValue("VOLC_ACCESSKEY", "VOLCENGINE_ACCESS_KEY_ID"),
     accessToken: getEnvValue(
@@ -143,7 +151,8 @@ function getVolcSpeechConfig(): VolcSpeechConfig {
     ),
     appKey: getEnvValue("VOLC_SPEECH_APP_ID", "VOLC_SPEECH_APP_KEY"),
     audioFormat:
-      getEnvValue("VOLC_SPEECH_AUDIO_FORMAT") || DEFAULT_AUDIO_FORMAT,
+      requestedAudioFormat ||
+      (useLegacy ? DEFAULT_LEGACY_AUDIO_FORMAT : DEFAULT_V3_AUDIO_FORMAT),
     requestedSpeaker: getEnvValue("VOLC_SPEECH_SPEAKER"),
     resourceId:
       getEnvValue("VOLC_SPEECH_RESOURCE_ID") || DEFAULT_V3_RESOURCE_ID,
@@ -159,7 +168,7 @@ function getVolcSpeechConfig(): VolcSpeechConfig {
       ),
       86_400,
     ),
-    useLegacy: getBooleanEnvValue("VOLC_SPEECH_USE_LEGACY"),
+    useLegacy,
   };
 }
 
@@ -230,6 +239,10 @@ function getStatusDetail(config: VolcSpeechConfig) {
 }
 
 function getContentType(format: string) {
+  if (format === "pcm") {
+    return "audio/wav";
+  }
+
   if (format === "wav") {
     return "audio/wav";
   }
@@ -239,6 +252,59 @@ function getContentType(format: string) {
   }
 
   return "audio/mpeg";
+}
+
+function trimLeadingPcmNoise(pcmBuffer: Buffer) {
+  if (!pcmBuffer.length) {
+    return pcmBuffer;
+  }
+
+  let firstVoiceSampleIndex = 0;
+
+  for (
+    let offset = 0;
+    offset + PCM_BYTES_PER_SAMPLE <= pcmBuffer.length;
+    offset += PCM_BYTES_PER_SAMPLE
+  ) {
+    const sample = pcmBuffer.readInt16LE(offset);
+
+    if (Math.abs(sample) >= PCM_SILENCE_THRESHOLD) {
+      firstVoiceSampleIndex = Math.max(
+        0,
+        offset / PCM_BYTES_PER_SAMPLE - PCM_TRIM_BACKTRACK_SAMPLES,
+      );
+      break;
+    }
+  }
+
+  return pcmBuffer.subarray(firstVoiceSampleIndex * PCM_BYTES_PER_SAMPLE);
+}
+
+function wrapPcmAsWav(
+  pcmBuffer: Buffer,
+  sampleRate: number,
+  channels = 1,
+  bitsPerSample = 16,
+) {
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const header = Buffer.alloc(44);
+
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcmBuffer.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcmBuffer.length, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
 }
 
 function buildProviderStatus(
@@ -465,7 +531,11 @@ function processSseEventBlock(
     );
   }
 
-  if (typeof payload.data === "string" && payload.data) {
+  if (
+    eventId === V3_AUDIO_EVENT_ID &&
+    typeof payload.data === "string" &&
+    payload.data
+  ) {
     audioChunks.push(Buffer.from(payload.data, "base64"));
   }
 
@@ -577,8 +647,17 @@ async function synthesizeWithVolcengineV3(
     );
   }
 
+  const combinedAudioBuffer = Buffer.concat(audioChunks);
+  const audioBuffer =
+    config.audioFormat === "pcm"
+      ? wrapPcmAsWav(
+          trimLeadingPcmNoise(combinedAudioBuffer),
+          config.sampleRate,
+        )
+      : combinedAudioBuffer;
+
   return {
-    audioBuffer: Buffer.concat(audioChunks),
+    audioBuffer,
     contentType: getContentType(config.audioFormat),
     durationSeconds: null,
     provider: V3_PROVIDER_LABEL,

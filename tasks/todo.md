@@ -39,6 +39,11 @@
 - [x] Fix the live auth and product-line mismatch by separating Doubao Speech V3 from the legacy SAMI path.
 - [x] Re-verify pronouncer status, browser fallback, and notebook flow under the current env.
 - [x] Validate successful live cloud playback once `VOLC_SPEECH_ACCESS_TOKEN` is added.
+- [x] Replace typed spelling submission with a spoken-letter answer flow aligned to Spelling Bee oral rounds.
+- [x] Add speech recognition capture and normalization for spelled-letter answers.
+- [x] Preserve `start over` behavior in the spoken-answer flow without relying on keyboard entry.
+- [x] Investigate and fix the odd raspy leading artifact in the current American female pronouncer audio.
+- [x] Re-verify the end-to-end oral drill flow with live pronouncer playback and spoken-answer judging.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -65,3 +70,7 @@
 18. The pronouncer provider now prefers Doubao Speech V3 with `APP ID + Access Token`, only uses the old SAMI chain when `VOLC_SPEECH_USE_LEGACY=true`, and reports missing `VOLC_SPEECH_ACCESS_TOKEN` as a configuration gap instead of failing with a generic `502`.
 19. Re-verification now includes `GET /api/pronouncer`, `POST /api/pronouncer` under the current env, plus a Playwright smoke flow confirming browser fallback, Definition prompt logging, miss capture, and notebook persistence still work after the provider refactor.
 20. After the app-level `Access Token` was added, live cloud playback succeeded: `/api/pronouncer` returned `200 OK` with `audio/mpeg`, the home screen moved to `volc ready`, and a Playwright click on `Repeat` triggered a real `POST /api/pronouncer 200` in the dev server logs.
+21. Research against the official 2025 Scripps rules confirmed that Bee spelling rounds are oral: the speller speaks letters aloud, may ask for repetition/definition/sentence/origin, and indicates completion orally after spelling the word.
+22. The answer card now uses spoken-letter capture as the primary interaction, with browser speech recognition, spelled-letter normalization, and an emergency manual fallback only when speech capture is unavailable.
+23. The odd leading pronouncer artifact was traced to the runtime path rather than the word data alone: the app previously auto-played browser speech even when cloud TTS was active, causing overlapping audio; the provider path now auto-plays through one channel only, and V3 output is normalized to `pcm -> wav` with leading low-amplitude noise trimmed.
+24. Re-verification now includes rule research, parser sample checks for spoken-letter normalization, a clean dev-server restart, a fresh Playwright smoke flow for the spoken-answer UI, and live pronouncer checks confirming a single `POST /api/pronouncer 200` on session start plus another on explicit `Repeat`.

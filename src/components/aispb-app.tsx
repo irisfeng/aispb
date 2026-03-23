@@ -29,6 +29,10 @@ import {
   getTodayKey,
 } from "@/lib/session-engine";
 import {
+  formatSpellingCandidate,
+  normalizeSpokenSpellingAttempt,
+} from "@/lib/spoken-spelling";
+import {
   defaultSettings,
   loadProgress,
   loadSettings,
@@ -46,6 +50,53 @@ import type {
 import { wordBank } from "@/lib/word-bank";
 
 type FeedEntryTone = "system" | "hint" | "success" | "danger";
+type SpeechCaptureState =
+  | "idle"
+  | "listening"
+  | "processing"
+  | "unsupported"
+  | "error";
+
+interface BrowserSpeechRecognitionAlternative {
+  transcript: string;
+}
+
+interface BrowserSpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  [index: number]: BrowserSpeechRecognitionAlternative;
+}
+
+interface BrowserSpeechRecognitionResultList {
+  length: number;
+  [index: number]: BrowserSpeechRecognitionResult;
+}
+
+interface BrowserSpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: BrowserSpeechRecognitionResultList;
+}
+
+interface BrowserSpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message?: string;
+}
+
+interface BrowserSpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: ((event: Event) => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onstart: ((event: Event) => void) | null;
+  abort: () => void;
+  start: () => void;
+  stop: () => void;
+}
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 interface FeedEntry {
   id: string;
@@ -69,7 +120,7 @@ const promptLabels: Record<DrillPromptKind, string> = {
   origin: "Origin",
 };
 const statusCopy: Record<SubmissionState, string> = {
-  idle: "Listen first, then spell with complete precision.",
+  idle: "Listen first, then spell aloud with clear, distinct letters.",
   correct: "Correct. The round advances automatically.",
   incorrect: "Miss logged. The word moves into review.",
   timeout: "Time expired. The word moves into review.",
@@ -153,6 +204,23 @@ function getPromptSpeechText(
   return dictionaryCue?.origin ?? word.origin;
 }
 
+function getSpeechRecognitionConstructor() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return (window.SpeechRecognition ??
+    window.webkitSpeechRecognition ??
+    null) as BrowserSpeechRecognitionConstructor | null;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  }
+}
+
 export function AispbApp() {
   const [storageReady, setStorageReady] = useState(false);
   const [settings, setSettings] = useState<DrillSettings>(defaultSettings);
@@ -164,7 +232,13 @@ export function AispbApp() {
   const [secondsLeft, setSecondsLeft] = useState(
     defaultSettings.roundDurationSeconds,
   );
-  const [answer, setAnswer] = useState("");
+  const [attemptDraft, setAttemptDraft] = useState("");
+  const [manualFallbackValue, setManualFallbackValue] = useState("");
+  const [speechCaptureState, setSpeechCaptureState] =
+    useState<SpeechCaptureState>("unsupported");
+  const [speechTranscript, setSpeechTranscript] = useState("");
+  const [speechInterimTranscript, setSpeechInterimTranscript] = useState("");
+  const [speechError, setSpeechError] = useState<string | null>(null);
   const [status, setStatus] = useState<SubmissionState>("idle");
   const [hintsUsed, setHintsUsed] = useState<DrillPromptKind[]>([]);
   const [restartCount, setRestartCount] = useState(0);
@@ -183,6 +257,11 @@ export function AispbApp() {
   >({});
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const shouldJudgeSpeechOnEndRef = useRef(false);
+  const recognitionHadErrorRef = useRef(false);
+  const latestSpeechTranscriptRef = useRef("");
+  const latestSpeechInterimTranscriptRef = useRef("");
   const [feed, setFeed] = useState<FeedEntry[]>([
     {
       id: "feed-initial",
@@ -209,11 +288,22 @@ export function AispbApp() {
     : null;
   const hasExternalPronouncer = pronouncerStatus?.configured ?? false;
   const pronouncerAvailable = hasExternalPronouncer || browserSpeechReady;
+  const speechRecognitionSupported = speechCaptureState !== "unsupported";
+  const combinedSpeechTranscript = [speechTranscript, speechInterimTranscript]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const shouldShowManualFallback =
+    !speechRecognitionSupported || speechCaptureState === "error";
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
   const interactionLocked =
-    !sessionStarted || sessionComplete || status !== "idle";
+    !sessionStarted ||
+    sessionComplete ||
+    status !== "idle" ||
+    speechCaptureState === "listening" ||
+    speechCaptureState === "processing";
   const timerDegrees =
     (secondsLeft / Math.max(plan.settings.roundDurationSeconds, 1)) * 360;
   const progressPercent =
@@ -232,6 +322,16 @@ export function AispbApp() {
     : browserSpeechReady
       ? "browser fallback"
       : "voice unavailable";
+  const speechStatusLabel =
+    speechCaptureState === "listening"
+      ? "listening"
+      : speechCaptureState === "processing"
+        ? "judging"
+        : speechCaptureState === "error"
+          ? "mic issue"
+          : speechCaptureState === "unsupported"
+            ? "manual fallback"
+            : "mic ready";
   const pronouncerDetail = hasExternalPronouncer
     ? `${pronouncerStatus?.detail ?? "Volcengine speech is active."} Browser speech stays available as a local fallback.`
     : pronouncerStatus?.detail
@@ -270,6 +370,22 @@ export function AispbApp() {
       URL.revokeObjectURL(audioUrlRef.current);
       audioUrlRef.current = null;
     }
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function resetSpeechAttempt() {
+    shouldJudgeSpeechOnEndRef.current = false;
+    recognitionHadErrorRef.current = false;
+    latestSpeechTranscriptRef.current = "";
+    latestSpeechInterimTranscriptRef.current = "";
+    setSpeechTranscript("");
+    setSpeechInterimTranscript("");
+    setSpeechError(null);
+    setAttemptDraft("");
+    setManualFallbackValue("");
   }
 
   async function playPronouncerText(text: string) {
@@ -290,6 +406,7 @@ export function AispbApp() {
         audioUrlRef.current = audioUrl;
         audio.onended = stopActiveAudio;
         audio.onerror = stopActiveAudio;
+        audio.preload = "auto";
         await audio.play();
 
         setLastPronouncerProvider(response.provider);
@@ -315,6 +432,206 @@ export function AispbApp() {
     return null;
   }
 
+  const autoplayCurrentWord = useEffectEvent((nextWord: string) => {
+    void playPronouncerText(nextWord);
+  });
+
+  async function submitAttempt(rawAttempt: string) {
+    if (!currentWord || !sessionStarted || sessionComplete) {
+      return;
+    }
+
+    const normalizedAttempt = normalizeSpokenSpellingAttempt(rawAttempt);
+    const candidate =
+      normalizedAttempt.candidate.trim().toLowerCase() ||
+      rawAttempt.trim().toLowerCase();
+
+    if (normalizedAttempt.command === "start-over") {
+      handleStartOver();
+      return;
+    }
+
+    if (!candidate) {
+      setSpeechCaptureState(
+        speechRecognitionSupported ? "idle" : "unsupported",
+      );
+      setSpeechError("No recognizable letters were captured.");
+      setFeed((previous) => [
+        createFeedEntry(
+          "Mic retry",
+          "No recognizable letters were captured. Try again and say each letter distinctly.",
+          "danger",
+        ),
+        ...previous,
+      ]);
+      return;
+    }
+
+    const normalizedWord = currentWord.word.toLowerCase();
+
+    if (candidate === normalizedWord) {
+      const nextStreak = streak + 1;
+
+      setProgress((previous) =>
+        applyDrillResult({
+          progress: previous,
+          wordId: currentWord.id,
+          result: "correct",
+          todayKey,
+        }),
+      );
+      setStatus("correct");
+      setStreak(nextStreak);
+      setBestStreak((previous) => Math.max(previous, nextStreak));
+      setSessionCorrectCount((previous) => previous + 1);
+      setFeed((previous) => [
+        createFeedEntry(
+          "Correct",
+          `${formatSpellingCandidate(candidate)} locked in for ${currentWord.word}. ${currentWord.coachingNote}`,
+          "success",
+        ),
+        ...previous,
+      ]);
+
+      window.setTimeout(() => {
+        advanceWord();
+      }, 850);
+      return;
+    }
+
+    await registerMiss("incorrect", candidate);
+  }
+
+  function startSpeechCapture() {
+    if (!sessionStarted || sessionComplete || status !== "idle") {
+      return;
+    }
+
+    const Recognition = getSpeechRecognitionConstructor();
+
+    if (!Recognition) {
+      setSpeechCaptureState("unsupported");
+      setSpeechError(
+        "This browser does not expose speech recognition yet. Use the manual fallback for now.",
+      );
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      const nextRecognition = new Recognition();
+
+      nextRecognition.continuous = true;
+      nextRecognition.interimResults = true;
+      nextRecognition.lang = "en-US";
+      nextRecognition.maxAlternatives = 1;
+      nextRecognition.onstart = () => {
+        recognitionHadErrorRef.current = false;
+        setSpeechCaptureState("listening");
+        setSpeechError(null);
+      };
+      nextRecognition.onresult = (event) => {
+        const finalChunks: string[] = [];
+        const interimChunks: string[] = [];
+
+        for (
+          let index = event.resultIndex;
+          index < event.results.length;
+          index += 1
+        ) {
+          const result = event.results[index];
+          const chunk = result[0]?.transcript?.trim();
+
+          if (!chunk) {
+            continue;
+          }
+
+          if (result.isFinal) {
+            finalChunks.push(chunk);
+          } else {
+            interimChunks.push(chunk);
+          }
+        }
+
+        setSpeechTranscript((previous) => {
+          const nextTranscript = [previous, ...finalChunks]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          latestSpeechTranscriptRef.current = nextTranscript;
+          latestSpeechInterimTranscriptRef.current = interimChunks
+            .join(" ")
+            .trim();
+
+          const normalized = normalizeSpokenSpellingAttempt(
+            [nextTranscript, interimChunks.join(" ")].filter(Boolean).join(" "),
+          );
+
+          setAttemptDraft(normalized.candidate);
+
+          return nextTranscript;
+        });
+        setSpeechInterimTranscript(interimChunks.join(" ").trim());
+      };
+      nextRecognition.onerror = (event) => {
+        recognitionHadErrorRef.current = true;
+        const nextError =
+          event.error === "not-allowed"
+            ? "Microphone permission was blocked."
+            : `Speech recognition error: ${event.error}.`;
+
+        setSpeechCaptureState("error");
+        setSpeechError(nextError);
+      };
+      nextRecognition.onend = () => {
+        const transcriptToJudge = [
+          latestSpeechTranscriptRef.current,
+          latestSpeechInterimTranscriptRef.current,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        if (shouldJudgeSpeechOnEndRef.current) {
+          shouldJudgeSpeechOnEndRef.current = false;
+          setSpeechCaptureState("processing");
+          setSpeechInterimTranscript("");
+          void submitAttempt(transcriptToJudge).finally(() => {
+            setSpeechCaptureState("idle");
+          });
+          return;
+        }
+
+        if (recognitionHadErrorRef.current) {
+          return;
+        }
+
+        setSpeechCaptureState("idle");
+      };
+
+      recognitionRef.current = nextRecognition;
+    }
+
+    resetSpeechAttempt();
+
+    try {
+      recognitionRef.current.start();
+    } catch (error) {
+      console.error("speech recognition start", error);
+      setSpeechCaptureState("error");
+      setSpeechError("Speech recognition failed to start.");
+    }
+  }
+
+  function stopSpeechCaptureAndJudge() {
+    if (!recognitionRef.current || speechCaptureState !== "listening") {
+      return;
+    }
+
+    shouldJudgeSpeechOnEndRef.current = true;
+    setSpeechCaptureState("processing");
+    recognitionRef.current.stop();
+  }
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const nextSettings = loadSettings();
@@ -325,6 +642,9 @@ export function AispbApp() {
       setSecondsLeft(nextSettings.roundDurationSeconds);
       setBrowserSpeechReady(
         typeof window !== "undefined" && "speechSynthesis" in window,
+      );
+      setSpeechCaptureState(
+        getSpeechRecognitionConstructor() ? "idle" : "unsupported",
       );
       setStorageReady(true);
       void fetchPronouncerStatus()
@@ -339,6 +659,8 @@ export function AispbApp() {
     return () => {
       window.clearTimeout(timeoutId);
       stopActiveAudio();
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
 
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
@@ -367,17 +689,22 @@ export function AispbApp() {
       return;
     }
 
-    if (!settings.pronouncerEnabled || !browserSpeechReady) {
+    if (!settings.pronouncerEnabled || sessionComplete) {
       return;
     }
 
-    stopActiveAudio();
-    pronounceWithBrowserSpeech(currentWord.word);
+    if (!hasExternalPronouncer && !browserSpeechReady) {
+      return;
+    }
+
+    autoplayCurrentWord(currentWord.word);
   }, [
     browserSpeechReady,
     currentIndex,
     currentWord,
     currentWord?.id,
+    hasExternalPronouncer,
+    sessionComplete,
     sessionStarted,
     settings.pronouncerEnabled,
   ]);
@@ -426,7 +753,7 @@ export function AispbApp() {
     setSessionComplete(false);
     setCurrentIndex(0);
     setSecondsLeft(nextPlan.settings.roundDurationSeconds);
-    setAnswer("");
+    resetSpeechAttempt();
     setStatus("idle");
     setHintsUsed([]);
     setRestartCount(0);
@@ -441,14 +768,6 @@ export function AispbApp() {
         "system",
       ),
     ]);
-
-    if (
-      nextPlan.words[0] &&
-      settings.pronouncerEnabled &&
-      hasExternalPronouncer
-    ) {
-      void playPronouncerText(nextPlan.words[0].word);
-    }
   }
 
   function advanceWord() {
@@ -477,7 +796,7 @@ export function AispbApp() {
 
       setCurrentIndex((previous) => previous + 1);
       setSecondsLeft(activePlan.settings.roundDurationSeconds);
-      setAnswer("");
+      resetSpeechAttempt();
       setStatus("idle");
       setHintsUsed([]);
       setRestartCount(0);
@@ -499,6 +818,10 @@ export function AispbApp() {
     if (!currentWord) {
       return;
     }
+
+    shouldJudgeSpeechOnEndRef.current = false;
+    recognitionRef.current?.abort();
+    setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
 
     const coachCopy = await localCoachAdapter.summarizeMiss(
       currentWord,
@@ -534,7 +857,7 @@ export function AispbApp() {
   const tick = useEffectEvent(() => {
     setSecondsLeft((previous) => {
       if (previous <= 1) {
-        void registerMiss("timeout", answer.trim());
+        void registerMiss("timeout", attemptDraft.trim());
         return plan.settings.roundDurationSeconds;
       }
 
@@ -601,57 +924,19 @@ export function AispbApp() {
       return;
     }
 
+    shouldJudgeSpeechOnEndRef.current = false;
+    recognitionRef.current?.abort();
+    setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
     setRestartCount((previous) => previous + 1);
-    setAnswer("");
+    resetSpeechAttempt();
     setFeed((previous) => [
       createFeedEntry(
         "Start over",
-        "Spelling reset. In official play, previously spoken letters cannot be reordered after a restart.",
+        "Captured spelling reset. In official play, previously spoken letters cannot be reordered after a restart.",
         "system",
       ),
       ...previous,
     ]);
-  }
-
-  async function handleSubmit() {
-    if (!currentWord || !answer.trim() || !sessionStarted || sessionComplete) {
-      return;
-    }
-
-    const normalizedAnswer = answer.trim().toLowerCase();
-    const normalizedWord = currentWord.word.toLowerCase();
-
-    if (normalizedAnswer === normalizedWord) {
-      const nextStreak = streak + 1;
-
-      setProgress((previous) =>
-        applyDrillResult({
-          progress: previous,
-          wordId: currentWord.id,
-          result: "correct",
-          todayKey,
-        }),
-      );
-      setStatus("correct");
-      setStreak(nextStreak);
-      setBestStreak((previous) => Math.max(previous, nextStreak));
-      setSessionCorrectCount((previous) => previous + 1);
-      setFeed((previous) => [
-        createFeedEntry(
-          "Correct",
-          `${currentWord.word} locked in. ${currentWord.coachingNote}`,
-          "success",
-        ),
-        ...previous,
-      ]);
-
-      window.setTimeout(() => {
-        advanceWord();
-      }, 850);
-      return;
-    }
-
-    await registerMiss("incorrect", answer.trim());
   }
 
   function renderNotebookEntry(entry: NotebookEntry) {
@@ -922,7 +1207,7 @@ export function AispbApp() {
             ))}
             <button
               className="action-button col-span-2 sm:col-span-5"
-              disabled={interactionLocked}
+              disabled={!sessionStarted || sessionComplete || status !== "idle"}
               onClick={handleStartOver}
               type="button"
             >
@@ -931,38 +1216,114 @@ export function AispbApp() {
           </div>
 
           <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
-            <label className="eyebrow" htmlFor="spelling-answer">
-              Spell the word
-            </label>
-            <input
-              className="mt-3 w-full rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4 text-lg text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12 disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={!sessionStarted || sessionComplete || status !== "idle"}
-              id="spelling-answer"
-              onChange={(event) => {
-                setAnswer(event.target.value);
-              }}
-              placeholder="type the full spelling here"
-              spellCheck={false}
-              type="text"
-              value={answer}
-            />
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="eyebrow">Spell Aloud</p>
+                <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                  Say each letter distinctly, then tap stop so the app can judge
+                  the attempt like an oral round.
+                </p>
+              </div>
+              <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                {speechStatusLabel}
+              </span>
+            </div>
+
+            <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                Live transcript
+              </p>
+              <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
+                {combinedSpeechTranscript ||
+                  "No speech captured yet. Tap start and spell the letters aloud."}
+              </p>
+            </div>
+
+            <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                Locked letters
+              </p>
+              <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
+                {formatSpellingCandidate(attemptDraft)}
+              </p>
+            </div>
+
+            {speechError ? (
+              <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
+                {speechError}
+              </p>
+            ) : null}
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                className="primary-button justify-center"
+                disabled={
+                  !sessionStarted ||
+                  sessionComplete ||
+                  status !== "idle" ||
+                  speechCaptureState === "listening" ||
+                  speechCaptureState === "processing"
+                }
+                onClick={startSpeechCapture}
+                type="button"
+              >
+                Start speaking
+              </button>
+              <button
+                className="secondary-button justify-center"
+                disabled={speechCaptureState !== "listening"}
+                onClick={stopSpeechCaptureAndJudge}
+                type="button"
+              >
+                Stop and judge
+              </button>
+            </div>
+
+            {shouldShowManualFallback ? (
+              <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                <label className="eyebrow" htmlFor="manual-spelling-fallback">
+                  Manual Fallback
+                </label>
+                <input
+                  className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                  id="manual-spelling-fallback"
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setManualFallbackValue(nextValue);
+                    setAttemptDraft(
+                      normalizeSpokenSpellingAttempt(nextValue).candidate,
+                    );
+                  }}
+                  placeholder="temporary fallback if mic recognition is unavailable"
+                  spellCheck={false}
+                  type="text"
+                  value={manualFallbackValue}
+                />
+                <button
+                  className="secondary-button mt-3 justify-center"
+                  disabled={
+                    !sessionStarted ||
+                    sessionComplete ||
+                    status !== "idle" ||
+                    !manualFallbackValue.trim()
+                  }
+                  onClick={() => {
+                    void submitAttempt(manualFallbackValue);
+                  }}
+                  type="button"
+                >
+                  Judge fallback attempt
+                </button>
+              </div>
+            ) : null}
 
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm leading-6 text-[color:var(--muted)]">
                 {statusCopy[status]}
               </p>
-              <button
-                className="primary-button justify-center px-5 py-3 text-sm"
-                disabled={
-                  !sessionStarted || sessionComplete || status !== "idle"
-                }
-                onClick={() => {
-                  void handleSubmit();
-                }}
-                type="button"
-              >
-                Submit spelling
-              </button>
+              <p className="text-xs leading-5 text-[color:var(--muted)]">
+                Say “start over” or tap the reset button to clear the capture.
+              </p>
             </div>
           </div>
         </div>
