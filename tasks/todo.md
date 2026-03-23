@@ -30,7 +30,12 @@
 - [x] Add environment-aware Merriam-Webster dictionary integration with local fallback.
 - [x] Route dictionary access through a provider layer instead of direct local adapter calls.
 - [x] Add a documented env template for real provider credentials.
-- [ ] Integrate real pronouncer and coach providers.
+- [x] Integrate a real pronouncer provider through a server-side adapter.
+- [x] Add Volcengine short-text TTS token management and audio invoke flow.
+- [x] Route pronouncer playback through the provider layer with browser speech fallback.
+- [x] Expose pronouncer provider status in the mobile UI.
+- [x] Verify pronouncer integration with lint, typecheck, build, and local HTTP checks.
+- [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
 
@@ -49,3 +54,6 @@
 11. The app now behaves as a true local MVP: seeded word bank, configurable daily planning, browser-side notebook persistence, and browser speech fallback are all wired.
 12. Dictionary lookups now go through a real provider seam: a Next API route uses Merriam-Webster when `MW_DICTIONARY_API_KEY` is configured and falls back to local seed data otherwise.
 13. Verification now also includes a local HTTP check for `/api/dictionary?word=verdant`, which currently returns the local fallback payload when no API key is present.
+14. Pronouncer playback now has a server-side path: `/api/pronouncer` reports provider status and synthesizes audio through Volcengine short-text TTS when credentials are configured.
+15. The mobile UI now surfaces pronouncer status, prefers the cloud provider for explicit prompt requests, and falls back to browser speech when external credentials are absent.
+16. Verification for the pronouncer path now includes `npm run lint`, `npm run typecheck`, `npm run build`, local HTTP checks for `/api/pronouncer`, and a Playwright smoke flow covering session start, prompt buttons, and notebook updates.

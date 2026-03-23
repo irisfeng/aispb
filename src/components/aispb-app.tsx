@@ -1,15 +1,27 @@
 "use client";
 
-import { startTransition, useEffect, useEffectEvent, useState } from "react";
+import {
+  startTransition,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 
 import {
   getPromptPreview,
   localCoachAdapter,
-  localPronouncerAdapter,
   providerCards,
 } from "@/lib/local-adapters";
-import type { DictionaryCuePayload } from "@/lib/provider-client";
-import { fetchDictionaryCue } from "@/lib/provider-client";
+import type {
+  DictionaryCuePayload,
+  PronouncerStatusPayload,
+} from "@/lib/provider-client";
+import {
+  fetchDictionaryCue,
+  fetchPronouncerAudio,
+  fetchPronouncerStatus,
+} from "@/lib/provider-client";
 import {
   applyDrillResult,
   createDrillPlan,
@@ -95,7 +107,7 @@ function createPreviewPlan(settings: DrillSettings, progress: ProgressMap) {
   });
 }
 
-function pronounce(text: string) {
+function pronounceWithBrowserSpeech(text: string) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
     return false;
   }
@@ -121,6 +133,26 @@ function pronounce(text: string) {
   return true;
 }
 
+function getPromptSpeechText(
+  word: NonNullable<DrillPlan["words"][number]>,
+  promptKind: DrillPromptKind,
+  dictionaryCue: DictionaryCuePayload | null,
+) {
+  if (promptKind === "repeat") {
+    return word.word;
+  }
+
+  if (promptKind === "definition") {
+    return dictionaryCue?.definition ?? word.definition;
+  }
+
+  if (promptKind === "sentence") {
+    return dictionaryCue?.sentence ?? word.sentence;
+  }
+
+  return dictionaryCue?.origin ?? word.origin;
+}
+
 export function AispbApp() {
   const [storageReady, setStorageReady] = useState(false);
   const [settings, setSettings] = useState<DrillSettings>(defaultSettings);
@@ -140,16 +172,23 @@ export function AispbApp() {
   const [bestStreak, setBestStreak] = useState(0);
   const [sessionCorrectCount, setSessionCorrectCount] = useState(0);
   const [sessionMissCount, setSessionMissCount] = useState(0);
-  const [speechReady, setSpeechReady] = useState(false);
+  const [browserSpeechReady, setBrowserSpeechReady] = useState(false);
+  const [pronouncerStatus, setPronouncerStatus] =
+    useState<PronouncerStatusPayload | null>(null);
+  const [lastPronouncerProvider, setLastPronouncerProvider] = useState<
+    string | null
+  >(null);
   const [dictionaryCache, setDictionaryCache] = useState<
     Record<string, DictionaryCuePayload>
   >({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const [feed, setFeed] = useState<FeedEntry[]>([
     {
       id: "feed-initial",
       label: "Warmup",
       content:
-        "Local MVP is ready. Start a drill to generate a fresh daily plan and notebook-aware review list.",
+        "The drill engine is ready. Start a session to generate today's deck and pull in the active pronouncer path.",
       tone: "system",
     },
   ]);
@@ -168,6 +207,8 @@ export function AispbApp() {
   const currentDictionaryCue = currentWord
     ? dictionaryCache[currentWord.id]
     : null;
+  const hasExternalPronouncer = pronouncerStatus?.configured ?? false;
+  const pronouncerAvailable = hasExternalPronouncer || browserSpeechReady;
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
@@ -186,6 +227,91 @@ export function AispbApp() {
       Math.max(sessionCorrectCount + sessionMissCount, 1)) *
       100,
   );
+  const voiceStatusLabel = hasExternalPronouncer
+    ? "volc ready"
+    : browserSpeechReady
+      ? "browser fallback"
+      : "voice unavailable";
+  const pronouncerDetail = hasExternalPronouncer
+    ? `Volcengine short-text TTS is active with speaker ${pronouncerStatus?.speaker ?? "default"}. Browser speech stays available as a local fallback.`
+    : browserSpeechReady
+      ? "External TTS is not configured yet. Browser speech is carrying local playback for drills and prompt repeats."
+      : "No active audio channel is available yet. Add Volcengine speech credentials or use a browser with speech synthesis support.";
+  const adapterBadge = lastPronouncerProvider
+    ? lastPronouncerProvider
+    : currentDictionaryCue?.provider
+      ? currentDictionaryCue.provider
+      : hasExternalPronouncer
+        ? (pronouncerStatus?.provider ?? "Volcengine short-text TTS")
+        : browserSpeechReady
+          ? "Browser speech fallback"
+          : "auto fallback";
+  const renderedProviderCards = providerCards.map((provider) => {
+    if (provider.role === "pronouncer") {
+      return {
+        ...provider,
+        detail: pronouncerDetail,
+        status: pronouncerAvailable ? "ready" : "planned",
+      } as const;
+    }
+
+    return provider;
+  });
+
+  function stopActiveAudio() {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }
+
+  async function playPronouncerText(text: string) {
+    if (!settings.pronouncerEnabled) {
+      return null;
+    }
+
+    if (hasExternalPronouncer) {
+      try {
+        const response = await fetchPronouncerAudio(text);
+
+        stopActiveAudio();
+
+        const audioUrl = URL.createObjectURL(response.blob);
+        const audio = new Audio(audioUrl);
+
+        audioRef.current = audio;
+        audioUrlRef.current = audioUrl;
+        audio.onended = stopActiveAudio;
+        audio.onerror = stopActiveAudio;
+        await audio.play();
+
+        setLastPronouncerProvider(response.provider);
+
+        return response.provider;
+      } catch (error) {
+        console.error("pronouncer remote fallback", error);
+      }
+    }
+
+    stopActiveAudio();
+
+    const didSpeak = pronounceWithBrowserSpeech(text);
+
+    if (didSpeak) {
+      setLastPronouncerProvider("Browser speech fallback");
+
+      return "Browser speech fallback";
+    }
+
+    setLastPronouncerProvider(null);
+
+    return null;
+  }
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -195,13 +321,27 @@ export function AispbApp() {
       setSettings(nextSettings);
       setProgress(nextProgress);
       setSecondsLeft(nextSettings.roundDurationSeconds);
-      setSpeechReady(
+      setBrowserSpeechReady(
         typeof window !== "undefined" && "speechSynthesis" in window,
       );
       setStorageReady(true);
+      void fetchPronouncerStatus()
+        .then((nextStatus) => {
+          setPronouncerStatus(nextStatus);
+        })
+        .catch((error) => {
+          console.error("pronouncer status fallback", error);
+        });
     }, 0);
 
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+      stopActiveAudio();
+
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -225,16 +365,14 @@ export function AispbApp() {
       return;
     }
 
-    if (!settings.pronouncerEnabled) {
+    if (!settings.pronouncerEnabled || !browserSpeechReady) {
       return;
     }
 
-    void localPronouncerAdapter
-      .getSpokenText(currentWord, "repeat")
-      .then((text) => {
-        pronounce(text);
-      });
+    stopActiveAudio();
+    pronounceWithBrowserSpeech(currentWord.word);
   }, [
+    browserSpeechReady,
     currentIndex,
     currentWord,
     currentWord?.id,
@@ -293,6 +431,7 @@ export function AispbApp() {
     setStreak(0);
     setSessionCorrectCount(0);
     setSessionMissCount(0);
+    setLastPronouncerProvider(null);
     setFeed([
       createFeedEntry(
         "Session start",
@@ -300,6 +439,14 @@ export function AispbApp() {
         "system",
       ),
     ]);
+
+    if (
+      nextPlan.words[0] &&
+      settings.pronouncerEnabled &&
+      hasExternalPronouncer
+    ) {
+      void playPronouncerText(nextPlan.words[0].word);
+    }
   }
 
   function advanceWord() {
@@ -412,6 +559,7 @@ export function AispbApp() {
 
     let displayText = getPromptPreview(currentWord, "repeat");
     let dictionaryCue: DictionaryCuePayload | null = null;
+    let pronouncerProvider: string | null = null;
 
     if (kind !== "repeat") {
       dictionaryCue = await resolveDictionaryCue();
@@ -425,12 +573,10 @@ export function AispbApp() {
       displayText = getPromptPreview(currentWord, kind);
     }
 
-    if (kind === "repeat" && settings.pronouncerEnabled) {
-      const spokenText = await localPronouncerAdapter.getSpokenText(
-        currentWord,
-        kind,
+    if (settings.pronouncerEnabled) {
+      pronouncerProvider = await playPronouncerText(
+        getPromptSpeechText(currentWord, kind, dictionaryCue),
       );
-      pronounce(spokenText);
     }
 
     setHintsUsed((previous) =>
@@ -439,7 +585,7 @@ export function AispbApp() {
     setFeed((previous) => [
       createFeedEntry(
         kind === "repeat"
-          ? promptLabels[kind]
+          ? `${promptLabels[kind]} · ${pronouncerProvider ?? "text only"}`
           : `${promptLabels[kind]} · ${dictionaryCue?.provider ?? "dictionary"}`,
         displayText,
         kind === "repeat" ? "system" : "hint",
@@ -557,9 +703,10 @@ export function AispbApp() {
           </div>
 
           <p className="mt-5 max-w-xl text-sm leading-7 text-[color:var(--muted)] sm:text-base">
-            The scaffold now generates a daily plan from a seeded word bank,
-            keeps a browser-side notebook, and can switch dictionary lookups to
-            Merriam-Webster whenever an API key is configured.
+            The app now generates a daily plan from a seeded word bank, keeps a
+            browser-side notebook, routes dictionary requests through
+            Merriam-Webster when configured, and can switch the pronouncer to
+            Volcengine short-text TTS.
           </p>
 
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -586,7 +733,7 @@ export function AispbApp() {
               <div className="flex items-center justify-between gap-3">
                 <p className="eyebrow">Settings</p>
                 <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                  {speechReady ? "voice ready" : "voice unavailable"}
+                  {voiceStatusLabel}
                 </span>
               </div>
 
@@ -631,16 +778,15 @@ export function AispbApp() {
               <div className="mt-4 flex items-center justify-between gap-3 rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3">
                 <div>
                   <p className="text-sm font-semibold text-[color:var(--foreground)]">
-                    Pronouncer fallback
+                    Pronouncer audio
                   </p>
                   <p className="mt-1 text-xs leading-5 text-[color:var(--muted)]">
-                    Browser speech synthesis for local testing before external
-                    TTS.
+                    {pronouncerDetail}
                   </p>
                 </div>
                 <button
                   className={`setting-chip ${settings.pronouncerEnabled ? "setting-chip-active" : ""}`}
-                  disabled={!speechReady}
+                  disabled={!pronouncerAvailable}
                   onClick={() =>
                     updateSettings({
                       pronouncerEnabled: !settings.pronouncerEnabled,
@@ -672,12 +818,12 @@ export function AispbApp() {
           <div className="flex items-center justify-between">
             <p className="eyebrow">Adapters</p>
             <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-              {currentDictionaryCue?.provider ?? "auto fallback"}
+              {adapterBadge}
             </span>
           </div>
 
           <div className="mt-5 space-y-3">
-            {providerCards.map((provider) => (
+            {renderedProviderCards.map((provider) => (
               <article
                 key={provider.id}
                 className="rounded-[24px] border border-[color:var(--line)] bg-white/75 p-4 shadow-[0_10px_30px_rgba(17,32,51,0.06)]"
@@ -730,6 +876,11 @@ export function AispbApp() {
                 Pronouncer cue
               </p>
               <div className="flex flex-wrap gap-2">
+                {lastPronouncerProvider ? (
+                  <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                    {lastPronouncerProvider}
+                  </span>
+                ) : null}
                 <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
                   {currentWord?.category ?? "standby"}
                 </span>

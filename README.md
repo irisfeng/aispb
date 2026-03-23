@@ -23,11 +23,11 @@
 - 本地每日抽题与设置项：`5 / 10 / 20` 词，`60 / 90` 秒
 - 回合原型：计时器、提示按钮、拼写输入、反馈流
 - 浏览器端错词本与进度持久化
-- 浏览器 speech synthesis pronouncer fallback
+- 火山短文本 TTS pronouncer 通道，未配置时自动回退到浏览器 speech synthesis
 - 环境变量驱动的 Merriam-Webster 词典通道，未配置时自动回退到本地 seed 数据
 - provider adapter 结构，便于后续接入真实服务
 
-当前仍未接入正式 pronouncer TTS、云端存储和生产级 coach provider。
+当前仍未接入云端存储和生产级 coach provider。
 
 ## Local Run
 
@@ -36,7 +36,7 @@ npm install
 npm run dev
 ```
 
-如需启用真实 Merriam-Webster 词典查询：
+如需启用真实词典与 pronouncer：
 
 ```bash
 cp .env.example .env.local
@@ -47,6 +47,10 @@ cp .env.example .env.local
 ```bash
 MW_DICTIONARY_API_KEY=your_key_here
 MW_DICTIONARY_TYPE=collegiate
+VOLC_ACCESSKEY=your_access_key
+VOLC_SECRETKEY=your_secret_key
+VOLC_SPEECH_APP_KEY=your_speech_app_key
+VOLC_SPEECH_SPEAKER=en_female_samc
 ```
 
 常用命令：
@@ -69,6 +73,6 @@ tasks/             working notes required by rules.md
 ## Next
 
 1. 用真实词源替换 mock session 数据。
-2. 接入正式 pronouncer TTS 和音频缓存。
+2. 给 pronouncer 加上音频缓存与更细的发音人配置。
 3. 接入生产级 coach provider。
 4. 把浏览器端 notebook 升级为可同步的持久化数据层。

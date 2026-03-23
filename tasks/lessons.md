@@ -8,3 +8,4 @@
 4. Source PDFs, planning docs, and local memory logs should not be pushed to the public GitHub repo unless the user explicitly asks for that.
 5. A public repo should get a concise README early, once the first runnable scaffold exists.
 6. Public-facing docs should avoid personal names or identifiable details unless the user explicitly wants them included.
+7. Once the user says to keep shipping and the implementation path is already clear, move directly into code and verification instead of pausing at recommendation-only updates.

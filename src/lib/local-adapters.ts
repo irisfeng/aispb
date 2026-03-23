@@ -51,7 +51,7 @@ export const providerCards: ProviderCard[] = [
     label: "Pronouncer Adapter",
     role: "pronouncer",
     detail:
-      "Local MVP uses browser speech synthesis now, with a clean slot for Doubao, Polly, or OpenAI later.",
+      "Pronouncer playback routes through a server provider when configured, with browser speech available as fallback.",
     status: "ready",
   },
   {
