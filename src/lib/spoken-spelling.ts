@@ -3,7 +3,11 @@ export type SpokenAttemptCommand = "start-over";
 export interface NormalizedSpokenAttempt {
   candidate: string;
   command: SpokenAttemptCommand | null;
+  looksLikeSpelling: boolean;
+  recognizedTokenCount: number;
   transcript: string;
+  unknownTokenCount: number;
+  usedWholeWordFallback: boolean;
 }
 
 interface NormalizeSpokenAttemptOptions {
@@ -216,6 +220,9 @@ export function normalizeSpokenSpellingAttempt(
   const tokens = tokenizeTranscript(transcript);
   const command = findCommand(tokens);
   let candidate = "";
+  let recognizedTokenCount = 0;
+  let unknownTokenCount = 0;
+  let usedWholeWordFallback = false;
 
   for (let index = 0; index < tokens.length; ) {
     const token = tokens[index];
@@ -229,10 +236,12 @@ export function normalizeSpokenSpellingAttempt(
 
     if (pushedLetter) {
       candidate += pushedLetter.letters;
+      recognizedTokenCount += 1;
       index = pushedLetter.nextIndex;
       continue;
     }
 
+    unknownTokenCount += 1;
     index += 1;
   }
 
@@ -242,12 +251,25 @@ export function normalizeSpokenSpellingAttempt(
     /^[a-z]+(?: [a-z]+)*$/.test(normalizedTranscript)
   ) {
     candidate = normalizedTranscript.replaceAll(" ", "");
+    usedWholeWordFallback = true;
   }
+
+  const looksLikeSpelling =
+    command === "start-over" ||
+    usedWholeWordFallback ||
+    (Boolean(candidate) &&
+      ((recognizedTokenCount >= 2 && unknownTokenCount === 0) ||
+        (candidate.length >= 3 &&
+          recognizedTokenCount >= Math.max(2, unknownTokenCount * 2))));
 
   return {
     candidate,
     command,
+    looksLikeSpelling,
+    recognizedTokenCount,
     transcript: normalizedTranscript,
+    unknownTokenCount,
+    usedWholeWordFallback,
   };
 }
 

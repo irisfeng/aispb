@@ -50,6 +50,7 @@
 - [x] Remove explicit dev-like start/stop friction from the round flow and reduce the session UI to a simpler mobile interaction model.
 - [x] Simplify the overall mobile surface so the live round reads like one focused card instead of multiple tool panels.
 - [x] Re-investigate the current pronouncer onset artifact and harden the cloud audio parsing/trim path against noisy V3 pre-roll.
+- [x] Replace the exposed `Ask pronouncer` / `Spell answer` split with a single primary talk action that routes intent internally.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -89,3 +90,5 @@
 31. The odd onset sound was reproduced against live Volcengine output and traced to low-energy pre-roll in the raw PCM rather than a browser-only playback artifact.
 32. The V3 trimming path now uses consecutive activity windows with a minimal 1ms backtrack instead of the earlier looser sample-threshold/backtrack strategy, reducing the chance that noisy pre-roll leaks into the final WAV.
 33. Verification for the audio pass included live provider sampling, direct waveform inspection of raw versus trimmed PCM-derived WAV files, plus `npm run lint`, `npm run typecheck`, and `npm run build`.
+34. The live round now exposes a single `Talk` primary action and keeps intent routing internal, so users no longer have to choose between `Ask pronouncer` and `Spell answer` before speaking.
+35. Verification for the single-action pass included `npm run lint`, `npm run typecheck`, `npm run build`, and a Playwright smoke flow against a local production instance confirming `Begin today's drill` leads to a round with one `Talk` button plus rule-safe clue chips, and `Definition` still routes through the pronouncer path.
