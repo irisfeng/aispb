@@ -92,3 +92,4 @@
 33. Verification for the audio pass included live provider sampling, direct waveform inspection of raw versus trimmed PCM-derived WAV files, plus `npm run lint`, `npm run typecheck`, and `npm run build`.
 34. The live round now exposes a single `Talk` primary action and keeps intent routing internal, so users no longer have to choose between `Ask pronouncer` and `Spell answer` before speaking.
 35. Verification for the single-action pass included `npm run lint`, `npm run typecheck`, `npm run build`, and a Playwright smoke flow against a local production instance confirming `Begin today's drill` leads to a round with one `Talk` button plus rule-safe clue chips, and `Definition` still routes through the pronouncer path.
+36. Development and test records for the single-action talk-flow pass are now explicitly marked in the dated local memory log for audit and morning acceptance.
