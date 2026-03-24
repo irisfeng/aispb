@@ -111,10 +111,8 @@ const roundOptions = [60, 90];
 const suggestedPromptOrder: DrillPromptKind[] = [
   "repeat",
   "definition",
-  "part-of-speech",
   "sentence",
   "origin",
-  "all-info",
 ];
 const promptLabels: Record<DrillPromptKind, string> = {
   repeat: "Repeat",
@@ -248,6 +246,7 @@ export function AispbApp() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechIdleTimerRef = useRef<number | null>(null);
   const voiceCaptureModeRef = useRef<VoiceCaptureMode>(null);
   const shouldJudgeSpeechOnEndRef = useRef(false);
   const recognitionHadErrorRef = useRef(false);
@@ -333,6 +332,26 @@ export function AispbApp() {
         : speechCaptureState === "unsupported"
           ? "manual fallback"
           : "spell ready";
+  const askActionLabel =
+    speechCaptureState === "listening" && voiceCaptureMode === "ask"
+      ? "Listening... tap to finish"
+      : "Ask pronouncer";
+  const spellActionLabel =
+    speechCaptureState === "listening" && voiceCaptureMode === "spell"
+      ? "Listening... tap to finish"
+      : "Spell answer";
+  const askActionDisabled =
+    !sessionStarted ||
+    sessionComplete ||
+    status !== "idle" ||
+    (isVoiceBusy &&
+      !(speechCaptureState === "listening" && voiceCaptureMode === "ask"));
+  const spellActionDisabled =
+    !sessionStarted ||
+    sessionComplete ||
+    status !== "idle" ||
+    (isVoiceBusy &&
+      !(speechCaptureState === "listening" && voiceCaptureMode === "spell"));
   const pronouncerDetail = hasExternalPronouncer
     ? `${pronouncerStatus?.detail ?? "Volcengine speech is active."} Browser speech stays available as a local fallback.`
     : pronouncerStatus?.detail
@@ -360,6 +379,7 @@ export function AispbApp() {
 
     return provider;
   });
+  const recentFeed = feed.slice(0, 3);
 
   function stopActiveAudio() {
     if (audioRef.current) {
@@ -374,6 +394,13 @@ export function AispbApp() {
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
+    }
+  }
+
+  function clearSpeechIdleTimer() {
+    if (speechIdleTimerRef.current) {
+      window.clearTimeout(speechIdleTimerRef.current);
+      speechIdleTimerRef.current = null;
     }
   }
 
@@ -392,6 +419,7 @@ export function AispbApp() {
 
     shouldJudgeSpeechOnEndRef.current = false;
     recognitionHadErrorRef.current = false;
+    clearSpeechIdleTimer();
     voiceCaptureModeRef.current = null;
     setVoiceCaptureMode(null);
     latestSpeechTranscriptRef.current = "";
@@ -567,6 +595,7 @@ export function AispbApp() {
       nextRecognition.maxAlternatives = 1;
       nextRecognition.onstart = () => {
         recognitionHadErrorRef.current = false;
+        clearSpeechIdleTimer();
         setSpeechCaptureState("listening");
         setSpeechError(null);
       };
@@ -622,6 +651,19 @@ export function AispbApp() {
             setAttemptDraft(normalized.candidate);
           }
 
+          clearSpeechIdleTimer();
+          speechIdleTimerRef.current = window.setTimeout(() => {
+            if (
+              recognitionRef.current &&
+              voiceCaptureModeRef.current &&
+              !recognitionHadErrorRef.current
+            ) {
+              shouldJudgeSpeechOnEndRef.current = true;
+              setSpeechCaptureState("processing");
+              recognitionRef.current.stop();
+            }
+          }, 1200);
+
           return nextTranscript;
         });
         setSpeechInterimTranscript(interimChunks.join(" ").trim());
@@ -647,6 +689,7 @@ export function AispbApp() {
 
         if (shouldJudgeSpeechOnEndRef.current) {
           shouldJudgeSpeechOnEndRef.current = false;
+          clearSpeechIdleTimer();
           setSpeechCaptureState("processing");
           setSpeechInterimTranscript("");
           const modeToHandle = voiceCaptureModeRef.current;
@@ -672,6 +715,7 @@ export function AispbApp() {
           return;
         }
 
+        clearSpeechIdleTimer();
         voiceCaptureModeRef.current = null;
         setVoiceCaptureMode(null);
         setSpeechCaptureState("idle");
@@ -707,8 +751,22 @@ export function AispbApp() {
     }
 
     shouldJudgeSpeechOnEndRef.current = true;
+    clearSpeechIdleTimer();
     setSpeechCaptureState("processing");
     recognitionRef.current.stop();
+  }
+
+  function handleVoiceAction(mode: Exclude<VoiceCaptureMode, null>) {
+    if (speechCaptureState === "listening" && voiceCaptureMode === mode) {
+      stopSpeechCaptureAndHandle();
+      return;
+    }
+
+    if (isVoiceBusy) {
+      return;
+    }
+
+    startSpeechCapture(mode);
   }
 
   useEffect(() => {
@@ -738,6 +796,7 @@ export function AispbApp() {
     return () => {
       window.clearTimeout(timeoutId);
       stopActiveAudio();
+      clearSpeechIdleTimer();
       recognitionRef.current?.abort();
       recognitionRef.current = null;
 
@@ -1104,6 +1163,297 @@ export function AispbApp() {
     );
   }
 
+  if (sessionStarted && !sessionComplete && currentWord) {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+        <section className="panel relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7">
+          <div className="absolute inset-x-0 top-0 h-px bg-white/70" />
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow">AISPB</p>
+              <h1 className="mt-3 font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)] sm:text-4xl">
+                Round {currentIndex + 1}
+              </h1>
+            </div>
+            <div
+              aria-hidden="true"
+              className="timer-shell"
+              style={{
+                background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
+              }}
+            >
+              <div className="timer-core">
+                <span className="timer-value">{secondsLeft}</span>
+                <span className="timer-label">seconds</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-[color:var(--ink)] px-5 py-5 text-[color:var(--paper)]">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm uppercase tracking-[0.22em] text-white/55">
+                Pronouncer cue
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                  {lastPronouncerProvider ?? "ready"}
+                </span>
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                  {currentWord.category}
+                </span>
+              </div>
+            </div>
+            <p className="mt-4 font-[family:var(--font-display)] text-5xl leading-none">
+              Word {String(currentIndex + 1).padStart(2, "0")}
+            </p>
+            <p className="mt-4 max-w-lg text-sm leading-6 text-white/70">
+              {currentWord.pronunciationNote}
+            </p>
+          </div>
+
+          <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="eyebrow">Live Round</p>
+                <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                  Ask the pronouncer or spell the answer. One tap starts
+                  listening; the app finishes automatically after a short pause.
+                </p>
+              </div>
+              <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                {voiceStatusLabel}
+              </span>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                className="primary-button flex-1 justify-center"
+                disabled={askActionDisabled}
+                onClick={() => {
+                  handleVoiceAction("ask");
+                }}
+                type="button"
+              >
+                {askActionLabel}
+              </button>
+              <button
+                className="primary-button flex-1 justify-center"
+                disabled={spellActionDisabled}
+                onClick={() => {
+                  handleVoiceAction("spell");
+                }}
+                type="button"
+              >
+                {spellActionLabel}
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {suggestedPromptOrder.map((prompt) => (
+                <button
+                  key={prompt}
+                  className="action-button min-h-10 rounded-full px-4 py-2"
+                  disabled={interactionLocked}
+                  onClick={() => {
+                    void requestPronouncerPrompt(prompt);
+                  }}
+                  type="button"
+                >
+                  {promptLabels[prompt]}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <article className="rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Last request
+                </p>
+                <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
+                  {askTranscriptDisplay ||
+                    "Try definition, sentence, origin, repeat, or ask in your own words."}
+                </p>
+                <p className="mt-2 text-xs leading-5 text-[color:var(--muted)]">
+                  {askStatusLabel}
+                </p>
+              </article>
+
+              <article className="rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Spelling
+                </p>
+                <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
+                  {spellingTranscriptDisplay ||
+                    "No spelling captured yet. Tap Spell answer when you are ready."}
+                </p>
+                <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
+                  {formatSpellingCandidate(attemptDraft)}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button justify-center px-4 py-2 text-sm"
+                    disabled={
+                      !sessionStarted || sessionComplete || status !== "idle"
+                    }
+                    onClick={handleStartOver}
+                    type="button"
+                  >
+                    Start Over
+                  </button>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-[color:var(--muted)]">
+                  {spellStatusLabel}
+                </p>
+              </article>
+            </div>
+
+            {status !== "idle" ? (
+              <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--accent-soft)]/70 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  Reveal
+                </p>
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <p className="font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)]">
+                    {currentWord.word}
+                  </p>
+                  <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                    {status === "correct"
+                      ? "correct"
+                      : status === "timeout"
+                        ? "timed out"
+                        : "miss"}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                  {currentWord.coachingNote}
+                </p>
+              </div>
+            ) : null}
+
+            {speechError ? (
+              <p className="mt-4 text-sm leading-6 text-[color:var(--signal)]">
+                {speechError}
+              </p>
+            ) : null}
+
+            {shouldShowManualFallback ? (
+              <div className="mt-4 grid gap-3 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                <div>
+                  <label className="eyebrow" htmlFor="compact-prompt-fallback">
+                    Prompt fallback
+                  </label>
+                  <input
+                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                    id="compact-prompt-fallback"
+                    onChange={(event) => {
+                      setManualPromptValue(event.target.value);
+                    }}
+                    placeholder="definition / sentence / origin"
+                    spellCheck={false}
+                    type="text"
+                    value={manualPromptValue}
+                  />
+                  <button
+                    className="secondary-button mt-3 justify-center"
+                    disabled={
+                      !sessionStarted ||
+                      sessionComplete ||
+                      status !== "idle" ||
+                      !manualPromptValue.trim()
+                    }
+                    onClick={() => {
+                      void handlePronouncerDialogue(manualPromptValue).finally(
+                        () => {
+                          setManualPromptValue("");
+                        },
+                      );
+                    }}
+                    type="button"
+                  >
+                    Send prompt
+                  </button>
+                </div>
+
+                <div>
+                  <label
+                    className="eyebrow"
+                    htmlFor="compact-spelling-fallback"
+                  >
+                    Spelling fallback
+                  </label>
+                  <input
+                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                    id="compact-spelling-fallback"
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setManualFallbackValue(nextValue);
+                      setSpellingTranscript(nextValue);
+                      setAttemptDraft(
+                        normalizeSpokenSpellingAttempt(nextValue, {
+                          allowWholeWordFallback: true,
+                        }).candidate,
+                      );
+                    }}
+                    placeholder="A U S P I C I O U S"
+                    spellCheck={false}
+                    type="text"
+                    value={manualFallbackValue}
+                  />
+                  <button
+                    className="secondary-button mt-3 justify-center"
+                    disabled={
+                      !sessionStarted ||
+                      sessionComplete ||
+                      status !== "idle" ||
+                      !manualFallbackValue.trim()
+                    }
+                    onClick={() => {
+                      void submitAttempt(manualFallbackValue, {
+                        allowWholeWordFallback: true,
+                      });
+                    }}
+                    type="button"
+                  >
+                    Judge spelling
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-2">
+              {recentFeed.map((entry) => (
+                <article
+                  key={entry.id}
+                  className={`rounded-[20px] border px-4 py-3 ${feedToneClass[entry.tone]}`}
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">
+                    {entry.label}
+                  </p>
+                  <p className="mt-2 text-sm leading-6">{entry.content}</p>
+                </article>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <div className="stat-card">
+                <span className="stat-label">Streak</span>
+                <strong>{streak}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">Accuracy</span>
+                <strong>{sessionAccuracy}%</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">Notebook</span>
+                <strong>{dueNotebookCount}</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-8">
       <section className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
@@ -1233,7 +1583,7 @@ export function AispbApp() {
           </div>
         </div>
 
-        <aside className="panel px-5 py-6 sm:px-6">
+        <aside className="panel hidden px-5 py-6 sm:px-6 lg:block">
           <div className="flex items-center justify-between">
             <p className="eyebrow">Adapters</p>
             <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
@@ -1264,431 +1614,475 @@ export function AispbApp() {
         </aside>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]" id="session">
-        <div className="panel px-5 py-6 sm:px-6 sm:py-7">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="eyebrow">Session</p>
-              <h2 className="mt-2 text-2xl font-semibold text-[color:var(--foreground)]">
-                {sessionComplete
-                  ? "Session complete"
-                  : `Round ${Math.min(currentIndex + 1, Math.max(totalWords, 1))} of ${Math.max(totalWords, 1)}`}
-              </h2>
-            </div>
-            <div
-              aria-hidden="true"
-              className="timer-shell"
-              style={{
-                background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
-              }}
-            >
-              <div className="timer-core">
-                <span className="timer-value">{secondsLeft}</span>
-                <span className="timer-label">seconds</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-[color:var(--ink)] px-5 py-5 text-[color:var(--paper)]">
+      {sessionComplete ? (
+        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]" id="session">
+          <div className="panel px-5 py-6 sm:px-6 sm:py-7">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm uppercase tracking-[0.22em] text-white/55">
-                Pronouncer cue
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {lastPronouncerProvider ? (
-                  <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                    {lastPronouncerProvider}
-                  </span>
-                ) : null}
-                <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                  {currentWord?.category ?? "standby"}
-                </span>
-                {currentWord ? (
-                  <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                    {currentWord.planReason}
-                  </span>
-                ) : null}
+              <div>
+                <p className="eyebrow">Session</p>
+                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--foreground)]">
+                  {sessionComplete
+                    ? "Session complete"
+                    : `Round ${Math.min(currentIndex + 1, Math.max(totalWords, 1))} of ${Math.max(totalWords, 1)}`}
+                </h2>
+              </div>
+              <div
+                aria-hidden="true"
+                className="timer-shell"
+                style={{
+                  background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
+                }}
+              >
+                <div className="timer-core">
+                  <span className="timer-value">{secondsLeft}</span>
+                  <span className="timer-label">seconds</span>
+                </div>
               </div>
             </div>
-            <p className="mt-4 font-[family:var(--font-display)] text-4xl leading-none sm:text-5xl">
-              Word{" "}
-              {String(
-                Math.min(currentIndex + 1, Math.max(totalWords, 1)),
-              ).padStart(2, "0")}
-            </p>
-            <p className="mt-4 max-w-lg text-sm leading-6 text-white/70">
-              {currentWord
-                ? `Current cue: ${currentWord.pronunciationNote}`
-                : "Start a session to load the first word."}
-            </p>
-          </div>
 
-          <div className="mt-5 grid gap-4 xl:grid-cols-[0.96fr_1.04fr]">
-            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="eyebrow">Pronouncer Agent</p>
-                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                    Ask natural Bee-style questions in plain English. The
-                    pronouncer stays inside the official lane and never treats a
-                    request as a spelling attempt.
+            <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-[color:var(--ink)] px-5 py-5 text-[color:var(--paper)]">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm uppercase tracking-[0.22em] text-white/55">
+                  Pronouncer cue
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {lastPronouncerProvider ? (
+                    <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                      {lastPronouncerProvider}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                    {currentWord?.category ?? "standby"}
+                  </span>
+                  {currentWord ? (
+                    <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
+                      {currentWord.planReason}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <p className="mt-4 font-[family:var(--font-display)] text-4xl leading-none sm:text-5xl">
+                Word{" "}
+                {String(
+                  Math.min(currentIndex + 1, Math.max(totalWords, 1)),
+                ).padStart(2, "0")}
+              </p>
+              <p className="mt-4 max-w-lg text-sm leading-6 text-white/70">
+                {currentWord
+                  ? `Current cue: ${currentWord.pronunciationNote}`
+                  : "Start a session to load the first word."}
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-[0.96fr_1.04fr]">
+              <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="eyebrow">Pronouncer Agent</p>
+                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                      Ask natural Bee-style questions in plain English. The
+                      pronouncer stays inside the official lane and never treats
+                      a request as a spelling attempt.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                    {askStatusLabel}
+                  </span>
+                </div>
+
+                <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                    Last request
+                  </p>
+                  <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
+                    {askTranscriptDisplay ||
+                      "Try “definition”, “use it in a sentence”, “part of speech”, or “say it again.”"}
                   </p>
                 </div>
-                <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                  {askStatusLabel}
-                </span>
-              </div>
 
-              <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                  Last request
-                </p>
-                <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
-                  {askTranscriptDisplay ||
-                    "Try “definition”, “use it in a sentence”, “part of speech”, or “say it again.”"}
-                </p>
-              </div>
+                {speechError && voiceCaptureMode === "ask" ? (
+                  <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
+                    {speechError}
+                  </p>
+                ) : null}
 
-              {speechError && voiceCaptureMode === "ask" ? (
-                <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
-                  {speechError}
-                </p>
-              ) : null}
-
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                <button
-                  className="primary-button justify-center"
-                  disabled={interactionLocked}
-                  onClick={() => {
-                    startSpeechCapture("ask");
-                  }}
-                  type="button"
-                >
-                  Ask pronouncer
-                </button>
-                <button
-                  className="secondary-button justify-center"
-                  disabled={speechCaptureState !== "listening"}
-                  onClick={stopSpeechCaptureAndHandle}
-                  type="button"
-                >
-                  Stop listening
-                </button>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                {suggestedPromptOrder.map((prompt) => (
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                   <button
-                    key={prompt}
-                    className="action-button min-h-10 rounded-full px-4 py-2"
+                    className="primary-button justify-center"
                     disabled={interactionLocked}
                     onClick={() => {
-                      void requestPronouncerPrompt(prompt);
+                      startSpeechCapture("ask");
                     }}
                     type="button"
                   >
-                    {promptLabels[prompt]}
+                    Ask pronouncer
                   </button>
-                ))}
+                  <button
+                    className="secondary-button justify-center"
+                    disabled={speechCaptureState !== "listening"}
+                    onClick={stopSpeechCaptureAndHandle}
+                    type="button"
+                  >
+                    Stop listening
+                  </button>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {suggestedPromptOrder.map((prompt) => (
+                    <button
+                      key={prompt}
+                      className="action-button min-h-10 rounded-full px-4 py-2"
+                      disabled={interactionLocked}
+                      onClick={() => {
+                        void requestPronouncerPrompt(prompt);
+                      }}
+                      type="button"
+                    >
+                      {promptLabels[prompt]}
+                    </button>
+                  ))}
+                </div>
+
+                {shouldShowManualFallback ? (
+                  <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                    <label className="eyebrow" htmlFor="manual-prompt-fallback">
+                      Prompt fallback
+                    </label>
+                    <input
+                      className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                      id="manual-prompt-fallback"
+                      onChange={(event) => {
+                        setManualPromptValue(event.target.value);
+                      }}
+                      placeholder="definition / part of speech / use it in a sentence"
+                      spellCheck={false}
+                      type="text"
+                      value={manualPromptValue}
+                    />
+                    <button
+                      className="secondary-button mt-3 justify-center"
+                      disabled={
+                        !sessionStarted ||
+                        sessionComplete ||
+                        status !== "idle" ||
+                        !manualPromptValue.trim()
+                      }
+                      onClick={() => {
+                        void handlePronouncerDialogue(
+                          manualPromptValue,
+                        ).finally(() => {
+                          setManualPromptValue("");
+                        });
+                      }}
+                      type="button"
+                    >
+                      Send prompt
+                    </button>
+                  </div>
+                ) : null}
+
+                <p className="mt-4 text-xs leading-5 text-[color:var(--muted)]">
+                  Allowed requests: repeat, definition, part of speech,
+                  sentence, origin, or all information. Spelling clues stay
+                  blocked.
+                </p>
               </div>
 
-              {shouldShowManualFallback ? (
-                <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
-                  <label className="eyebrow" htmlFor="manual-prompt-fallback">
-                    Prompt fallback
-                  </label>
-                  <input
-                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
-                    id="manual-prompt-fallback"
-                    onChange={(event) => {
-                      setManualPromptValue(event.target.value);
-                    }}
-                    placeholder="definition / part of speech / use it in a sentence"
-                    spellCheck={false}
-                    type="text"
-                    value={manualPromptValue}
-                  />
+              <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="eyebrow">Spell Answer</p>
+                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                      When you are ready, spell the letters aloud. The app
+                      judges only the oral spelling attempt and reveals the word
+                      card after the round resolves.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                    {spellStatusLabel}
+                  </span>
+                </div>
+
+                <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                    Spelling transcript
+                  </p>
+                  <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
+                    {spellingTranscriptDisplay ||
+                      "No spelling captured yet. Tap Spell answer and say each letter distinctly."}
+                  </p>
+                </div>
+
+                <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                    Locked letters
+                  </p>
+                  <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
+                    {formatSpellingCandidate(attemptDraft)}
+                  </p>
+                </div>
+
+                {status !== "idle" && currentWord ? (
+                  <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--accent-soft)]/70 px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                      Round reveal
+                    </p>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className="font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)]">
+                        {currentWord.word}
+                      </p>
+                      <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                        {status === "correct"
+                          ? "correct"
+                          : status === "timeout"
+                            ? "timed out"
+                            : "miss"}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
+                      {currentWord.pronunciationNote}
+                    </p>
+                  </div>
+                ) : null}
+
+                {speechError && voiceCaptureMode !== "ask" ? (
+                  <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
+                    {speechError}
+                  </p>
+                ) : null}
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                   <button
-                    className="secondary-button mt-3 justify-center"
-                    disabled={
-                      !sessionStarted ||
-                      sessionComplete ||
-                      status !== "idle" ||
-                      !manualPromptValue.trim()
-                    }
+                    className="primary-button justify-center"
+                    disabled={interactionLocked}
                     onClick={() => {
-                      void handlePronouncerDialogue(manualPromptValue).finally(
-                        () => {
-                          setManualPromptValue("");
-                        },
-                      );
+                      startSpeechCapture("spell");
                     }}
                     type="button"
                   >
-                    Send prompt
+                    Spell answer
+                  </button>
+                  <button
+                    className="secondary-button justify-center"
+                    disabled={speechCaptureState !== "listening"}
+                    onClick={stopSpeechCaptureAndHandle}
+                    type="button"
+                  >
+                    Stop and judge
+                  </button>
+                  <button
+                    className="secondary-button justify-center"
+                    disabled={
+                      !sessionStarted || sessionComplete || status !== "idle"
+                    }
+                    onClick={handleStartOver}
+                    type="button"
+                  >
+                    Start Over
                   </button>
                 </div>
-              ) : null}
 
-              <p className="mt-4 text-xs leading-5 text-[color:var(--muted)]">
-                Allowed requests: repeat, definition, part of speech, sentence,
-                origin, or all information. Spelling clues stay blocked.
-              </p>
-            </div>
+                {shouldShowManualFallback ? (
+                  <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
+                    <label
+                      className="eyebrow"
+                      htmlFor="manual-spelling-fallback"
+                    >
+                      Spelling fallback
+                    </label>
+                    <input
+                      className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                      id="manual-spelling-fallback"
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setManualFallbackValue(nextValue);
+                        setSpellingTranscript(nextValue);
+                        setAttemptDraft(
+                          normalizeSpokenSpellingAttempt(nextValue, {
+                            allowWholeWordFallback: true,
+                          }).candidate,
+                        );
+                      }}
+                      placeholder="A U S P I C I O U S"
+                      spellCheck={false}
+                      type="text"
+                      value={manualFallbackValue}
+                    />
+                    <button
+                      className="secondary-button mt-3 justify-center"
+                      disabled={
+                        !sessionStarted ||
+                        sessionComplete ||
+                        status !== "idle" ||
+                        !manualFallbackValue.trim()
+                      }
+                      onClick={() => {
+                        void submitAttempt(manualFallbackValue, {
+                          allowWholeWordFallback: true,
+                        });
+                      }}
+                      type="button"
+                    >
+                      Judge fallback attempt
+                    </button>
+                  </div>
+                ) : null}
 
-            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/78 p-4 shadow-[0_18px_40px_rgba(17,32,51,0.08)]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="eyebrow">Spell Answer</p>
-                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                    When you are ready, spell the letters aloud. The app judges
-                    only the oral spelling attempt and reveals the word card
-                    after the round resolves.
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm leading-6 text-[color:var(--muted)]">
+                    {statusCopy[status]}
+                  </p>
+                  <p className="text-xs leading-5 text-[color:var(--muted)]">
+                    If you need another clue, switch back to Ask pronouncer
+                    instead of saying it in spell mode.
                   </p>
                 </div>
-                <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                  {spellStatusLabel}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="panel px-5 py-6 sm:px-6">
+              <div className="flex items-center justify-between">
+                <p className="eyebrow">Momentum</p>
+                <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
+                  {sessionAccuracy}% accuracy
                 </span>
               </div>
 
-              <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                  Spelling transcript
-                </p>
-                <p className="mt-3 min-h-12 text-sm leading-6 text-[color:var(--foreground)]">
-                  {spellingTranscriptDisplay ||
-                    "No spelling captured yet. Tap Spell answer and say each letter distinctly."}
-                </p>
+              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/55">
+                <div
+                  className="h-full rounded-full bg-[linear-gradient(90deg,#0D7C66,#E0B36A)]"
+                  style={{ width: `${progressPercent}%` }}
+                />
               </div>
 
-              <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                  Locked letters
-                </p>
-                <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
-                  {formatSpellingCandidate(attemptDraft)}
-                </p>
+              <div className="mt-5 grid grid-cols-3 gap-3">
+                <div className="stat-card">
+                  <span className="stat-label">Streak</span>
+                  <strong>{streak}</strong>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-label">Best</span>
+                  <strong>{bestStreak}</strong>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-label">Restarts</span>
+                  <strong>{restartCount}</strong>
+                </div>
               </div>
 
-              {status !== "idle" && currentWord ? (
-                <div className="mt-3 rounded-[22px] border border-[color:var(--line)] bg-[color:var(--accent-soft)]/70 px-4 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                    Round reveal
-                  </p>
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <p className="font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)]">
-                      {currentWord.word}
-                    </p>
-                    <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                      {status === "correct"
-                        ? "correct"
-                        : status === "timeout"
-                          ? "timed out"
-                          : "miss"}
+              <div className="mt-5 flex flex-wrap gap-2">
+                <span className="badge">correct {sessionCorrectCount}</span>
+                <span className="badge">misses {sessionMissCount}</span>
+                <span className="badge">
+                  {plan.settings.roundDurationSeconds}s rounds
+                </span>
+                {hintsUsed.length === 0 ? (
+                  <span className="badge">No prompts used</span>
+                ) : (
+                  hintsUsed.map((hint) => (
+                    <span key={hint} className="badge">
+                      {promptLabels[hint]}
                     </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                    {currentWord.pronunciationNote}
-                  </p>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="panel px-5 py-6 sm:px-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Feed</p>
+                  <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
+                    Bee-style dialogue log
+                  </h3>
                 </div>
-              ) : null}
-
-              {speechError && voiceCaptureMode !== "ask" ? (
-                <p className="mt-3 text-sm leading-6 text-[color:var(--signal)]">
-                  {speechError}
-                </p>
-              ) : null}
-
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <button
-                  className="primary-button justify-center"
-                  disabled={interactionLocked}
-                  onClick={() => {
-                    startSpeechCapture("spell");
-                  }}
-                  type="button"
-                >
-                  Spell answer
-                </button>
-                <button
-                  className="secondary-button justify-center"
-                  disabled={speechCaptureState !== "listening"}
-                  onClick={stopSpeechCaptureAndHandle}
-                  type="button"
-                >
-                  Stop and judge
-                </button>
-                <button
-                  className="secondary-button justify-center"
-                  disabled={
-                    !sessionStarted || sessionComplete || status !== "idle"
-                  }
-                  onClick={handleStartOver}
-                  type="button"
-                >
-                  Start Over
-                </button>
+                <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
+                  newest first
+                </span>
               </div>
 
-              {shouldShowManualFallback ? (
-                <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
-                  <label className="eyebrow" htmlFor="manual-spelling-fallback">
-                    Spelling fallback
-                  </label>
-                  <input
-                    className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
-                    id="manual-spelling-fallback"
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setManualFallbackValue(nextValue);
-                      setSpellingTranscript(nextValue);
-                      setAttemptDraft(
-                        normalizeSpokenSpellingAttempt(nextValue, {
-                          allowWholeWordFallback: true,
-                        }).candidate,
-                      );
-                    }}
-                    placeholder="A U S P I C I O U S"
-                    spellCheck={false}
-                    type="text"
-                    value={manualFallbackValue}
-                  />
-                  <button
-                    className="secondary-button mt-3 justify-center"
-                    disabled={
-                      !sessionStarted ||
-                      sessionComplete ||
-                      status !== "idle" ||
-                      !manualFallbackValue.trim()
-                    }
-                    onClick={() => {
-                      void submitAttempt(manualFallbackValue, {
-                        allowWholeWordFallback: true,
-                      });
-                    }}
-                    type="button"
+              <div className="mt-4 space-y-3">
+                {feed.map((entry) => (
+                  <article
+                    key={entry.id}
+                    className={`rounded-[22px] border p-4 ${feedToneClass[entry.tone]}`}
                   >
-                    Judge fallback attempt
-                  </button>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">
+                      {entry.label}
+                    </p>
+                    <p className="mt-2 text-sm leading-6">{entry.content}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel px-5 py-6 sm:px-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Notebook</p>
+                  <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
+                    Persistent review queue
+                  </h3>
                 </div>
-              ) : null}
+                <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
+                  {notebookEntries.length} tracked
+                </span>
+              </div>
 
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm leading-6 text-[color:var(--muted)]">
-                  {statusCopy[status]}
-                </p>
-                <p className="text-xs leading-5 text-[color:var(--muted)]">
-                  If you need another clue, switch back to Ask pronouncer
-                  instead of saying it in spell mode.
-                </p>
+              <div className="mt-4 space-y-3">
+                {notebookEntries.length === 0 ? (
+                  <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
+                    No notebook words yet. Misses and timeouts persist locally
+                    and return in future daily plans.
+                  </div>
+                ) : (
+                  notebookEntries.slice(0, 5).map(renderNotebookEntry)
+                )}
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <div className="panel px-5 py-6 sm:px-6">
-            <div className="flex items-center justify-between">
-              <p className="eyebrow">Momentum</p>
-              <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                {sessionAccuracy}% accuracy
-              </span>
+        </section>
+      ) : (
+        <section className="panel px-5 py-6 sm:px-6" id="session">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow">Ready</p>
+              <h2 className="mt-2 text-2xl font-semibold text-[color:var(--foreground)]">
+                Tap begin to enter a focused round screen.
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-[color:var(--muted)]">
+                The live drill now stays minimal once it starts: one round card,
+                one tap to ask, one tap to spell, and reveal only after the
+                result.
+              </p>
             </div>
-
-            <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/55">
-              <div
-                className="h-full rounded-full bg-[linear-gradient(90deg,#0D7C66,#E0B36A)]"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-
-            <div className="mt-5 grid grid-cols-3 gap-3">
-              <div className="stat-card">
-                <span className="stat-label">Streak</span>
-                <strong>{streak}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">Best</span>
-                <strong>{bestStreak}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">Restarts</span>
-                <strong>{restartCount}</strong>
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              <span className="badge">correct {sessionCorrectCount}</span>
-              <span className="badge">misses {sessionMissCount}</span>
-              <span className="badge">
-                {plan.settings.roundDurationSeconds}s rounds
-              </span>
-              {hintsUsed.length === 0 ? (
-                <span className="badge">No prompts used</span>
-              ) : (
-                hintsUsed.map((hint) => (
-                  <span key={hint} className="badge">
-                    {promptLabels[hint]}
-                  </span>
-                ))
-              )}
-            </div>
+            <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+              {dueNotebookCount} due
+            </span>
           </div>
 
-          <div className="panel px-5 py-6 sm:px-6">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="eyebrow">Feed</p>
-                <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
-                  Bee-style dialogue log
-                </h3>
-              </div>
-              <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                newest first
-              </span>
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="stat-card">
+              <span className="stat-label">Deck</span>
+              <strong>{previewPlan.words.length}</strong>
             </div>
-
-            <div className="mt-4 space-y-3">
-              {feed.map((entry) => (
-                <article
-                  key={entry.id}
-                  className={`rounded-[22px] border p-4 ${feedToneClass[entry.tone]}`}
-                >
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">
-                    {entry.label}
-                  </p>
-                  <p className="mt-2 text-sm leading-6">{entry.content}</p>
-                </article>
-              ))}
+            <div className="stat-card">
+              <span className="stat-label">Timer</span>
+              <strong>{settings.roundDurationSeconds}s</strong>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Voice</span>
+              <strong>{voiceStatusLabel}</strong>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Notebook</span>
+              <strong>{notebookEntries.length}</strong>
             </div>
           </div>
-
-          <div className="panel px-5 py-6 sm:px-6">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="eyebrow">Notebook</p>
-                <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
-                  Persistent review queue
-                </h3>
-              </div>
-              <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                {notebookEntries.length} tracked
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {notebookEntries.length === 0 ? (
-                <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
-                  No notebook words yet. Misses and timeouts persist locally and
-                  return in future daily plans.
-                </div>
-              ) : (
-                notebookEntries.slice(0, 5).map(renderNotebookEntry)
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
     </main>
   );
 }

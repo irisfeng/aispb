@@ -22,8 +22,11 @@ const DEFAULT_V3_RESOURCE_ID = "seed-tts-2.0";
 const TOKEN_REFRESH_BUFFER_SECONDS = 90;
 const V3_AUDIO_EVENT_ID = "352";
 const PCM_BYTES_PER_SAMPLE = 2;
-const PCM_SILENCE_THRESHOLD = 96;
-const PCM_TRIM_BACKTRACK_SAMPLES = 240;
+const PCM_ACTIVITY_WINDOW_MS = 10;
+const PCM_ACTIVITY_STRIDE_MS = 5;
+const PCM_ACTIVITY_PEAK_THRESHOLD = 140;
+const PCM_ACTIVITY_REQUIRED_WINDOWS = 2;
+const PCM_TRIM_BACKTRACK_MS = 1;
 
 type PronouncerProviderMode = "v3" | "legacy" | "unconfigured";
 
@@ -254,30 +257,69 @@ function getContentType(format: string) {
   return "audio/mpeg";
 }
 
-function trimLeadingPcmNoise(pcmBuffer: Buffer) {
+function trimLeadingPcmNoise(pcmBuffer: Buffer, sampleRate: number) {
   if (!pcmBuffer.length) {
     return pcmBuffer;
   }
 
-  let firstVoiceSampleIndex = 0;
+  const totalSamples = Math.floor(pcmBuffer.length / PCM_BYTES_PER_SAMPLE);
+  const windowSamples = Math.max(
+    1,
+    Math.round((sampleRate * PCM_ACTIVITY_WINDOW_MS) / 1000),
+  );
+  const strideSamples = Math.max(
+    1,
+    Math.round((sampleRate * PCM_ACTIVITY_STRIDE_MS) / 1000),
+  );
+  const backtrackSamples = Math.max(
+    0,
+    Math.round((sampleRate * PCM_TRIM_BACKTRACK_MS) / 1000),
+  );
+  let consecutiveActiveWindows = 0;
+  let candidateStartSample = 0;
 
   for (
-    let offset = 0;
-    offset + PCM_BYTES_PER_SAMPLE <= pcmBuffer.length;
-    offset += PCM_BYTES_PER_SAMPLE
+    let startSample = 0;
+    startSample + windowSamples <= totalSamples;
+    startSample += strideSamples
   ) {
-    const sample = pcmBuffer.readInt16LE(offset);
+    let peak = 0;
 
-    if (Math.abs(sample) >= PCM_SILENCE_THRESHOLD) {
-      firstVoiceSampleIndex = Math.max(
-        0,
-        offset / PCM_BYTES_PER_SAMPLE - PCM_TRIM_BACKTRACK_SAMPLES,
+    for (
+      let sampleIndex = startSample;
+      sampleIndex < startSample + windowSamples;
+      sampleIndex += 1
+    ) {
+      const sample = Math.abs(
+        pcmBuffer.readInt16LE(sampleIndex * PCM_BYTES_PER_SAMPLE),
       );
-      break;
+
+      if (sample > peak) {
+        peak = sample;
+      }
     }
+
+    if (peak >= PCM_ACTIVITY_PEAK_THRESHOLD) {
+      if (consecutiveActiveWindows === 0) {
+        candidateStartSample = startSample;
+      }
+
+      consecutiveActiveWindows += 1;
+
+      if (consecutiveActiveWindows >= PCM_ACTIVITY_REQUIRED_WINDOWS) {
+        return pcmBuffer.subarray(
+          Math.max(0, candidateStartSample - backtrackSamples) *
+            PCM_BYTES_PER_SAMPLE,
+        );
+      }
+
+      continue;
+    }
+
+    consecutiveActiveWindows = 0;
   }
 
-  return pcmBuffer.subarray(firstVoiceSampleIndex * PCM_BYTES_PER_SAMPLE);
+  return pcmBuffer;
 }
 
 function wrapPcmAsWav(
@@ -651,7 +693,7 @@ async function synthesizeWithVolcengineV3(
   const audioBuffer =
     config.audioFormat === "pcm"
       ? wrapPcmAsWav(
-          trimLeadingPcmNoise(combinedAudioBuffer),
+          trimLeadingPcmNoise(combinedAudioBuffer, config.sampleRate),
           config.sampleRate,
         )
       : combinedAudioBuffer;

@@ -47,6 +47,9 @@
 - [x] Separate spoken Bee queries from spoken spelling attempts so prompt requests are never judged as answers.
 - [x] Add a rules-safe pronouncer dialogue agent layer with natural-language intent handling for official Bee-style requests.
 - [x] Refine the mobile session UI around a clean ask/spell flow instead of a dense action grid.
+- [x] Remove explicit dev-like start/stop friction from the round flow and reduce the session UI to a simpler mobile interaction model.
+- [x] Simplify the overall mobile surface so the live round reads like one focused card instead of multiple tool panels.
+- [x] Re-investigate the current pronouncer onset artifact and harden the cloud audio parsing/trim path against noisy V3 pre-roll.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -80,3 +83,9 @@
 25. The live round now has two distinct interaction lanes: `Ask pronouncer` for Bee-style dialogue and `Spell answer` for oral spelling capture, so spoken requests such as `definition` are no longer eligible for spelling judgment.
 26. The pronouncer layer now behaves like a guarded dialogue agent: it classifies natural-language requests such as repeat, definition, sentence, part of speech, origin, and `all info`, while refusing out-of-bounds spelling-clue requests.
 27. Re-verification for this round included `npm run lint`, `npm run typecheck`, `npm run build`, Playwright browser flow checks for session start plus definition/all-info prompt delivery, and parser assertions confirming `definition` produces no spelling candidate while spoken letters still normalize correctly.
+28. The mobile live round has been simplified again: one tap now starts either `Ask pronouncer` or `Spell answer`, speech capture auto-finishes after a short pause, and the active session surface is reduced to a single focused round card.
+29. The pre-session page no longer exposes the full disabled round UI; it now collapses to a short readiness card until a drill actually starts.
+30. Re-verification for the simplification pass included `npm run lint`, `npm run typecheck`, `npm run build`, a clean dev-server restart, and Playwright smoke checks for landing-state simplification plus `Begin today's drill -> Definition` on the focused round screen.
+31. The odd onset sound was reproduced against live Volcengine output and traced to low-energy pre-roll in the raw PCM rather than a browser-only playback artifact.
+32. The V3 trimming path now uses consecutive activity windows with a minimal 1ms backtrack instead of the earlier looser sample-threshold/backtrack strategy, reducing the chance that noisy pre-roll leaks into the final WAV.
+33. Verification for the audio pass included live provider sampling, direct waveform inspection of raw versus trimmed PCM-derived WAV files, plus `npm run lint`, `npm run typecheck`, and `npm run build`.

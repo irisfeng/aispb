@@ -13,3 +13,4 @@
 9. For Volcengine speech, auth docs and voice-list docs are separate sources; speaker defaults must be validated against the official voice list page, not inferred from integration examples.
 10. For a Spelling Bee product, answer input assumptions must mirror the real competition format first: contestants orally spell letters, so typed entry can only be a fallback or temporary dev aid, not the primary interaction.
 11. In a Bee-style oral round, spoken prompt requests such as “definition” or “use it in a sentence” must be classified as pronouncer dialogue, not fed into the spelling judge; the pronouncer experience needs an agent-like dialogue layer, not a flat button board.
+12. Even when the round logic is correct, the product still fails if the interaction feels like a debugging console; a mobile Bee app has to hide mode machinery and keep the live round down to the smallest possible number of obvious actions.
