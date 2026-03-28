@@ -67,6 +67,12 @@ type SpeechCaptureState =
   | "error";
 type VoiceCaptureMode = "talk" | null;
 
+interface SessionMissEntry {
+  word: import("@/lib/types").DrillWord;
+  attempt: string;
+  cue: DictionaryCuePayload | null;
+}
+
 interface BrowserSpeechRecognitionAlternative {
   transcript: string;
 }
@@ -256,6 +262,10 @@ export function AispbApp() {
   const [bestStreak, setBestStreak] = useState(0);
   const [sessionCorrectCount, setSessionCorrectCount] = useState(0);
   const [sessionMissCount, setSessionMissCount] = useState(0);
+  const [sessionMisses, setSessionMisses] = useState<SessionMissEntry[]>([]);
+  const [expandedNotebookWords, setExpandedNotebookWords] = useState<
+    Set<string>
+  >(new Set());
   const [notebookFilter, setNotebookFilter] = useState<
     "all" | "due" | "mastered" | "weak"
   >("all");
@@ -1218,6 +1228,7 @@ export function AispbApp() {
     setBestStreak(0);
     setSessionCorrectCount(0);
     setSessionMissCount(0);
+    setSessionMisses([]);
     setLastPronouncerProvider(null);
     setFeed([
       createFeedEntry(
@@ -1305,6 +1316,27 @@ export function AispbApp() {
         todayKey,
       }),
     );
+    // Fetch dictionary cue for the reveal card (use cache if available)
+    let missCue: DictionaryCuePayload | null =
+      dictionaryCache[currentWord.id] ?? null;
+    if (!missCue) {
+      try {
+        missCue = await fetchDictionaryCue(currentWord);
+        if (missCue) {
+          setDictionaryCache((prev) => ({
+            ...prev,
+            [currentWord.id]: missCue!,
+          }));
+        }
+      } catch {
+        // proceed without cue
+      }
+    }
+
+    setSessionMisses((previous) => [
+      ...previous,
+      { word: currentWord, attempt, cue: missCue },
+    ]);
     setSessionMissCount((previous) => previous + 1);
     setStreak(0);
     setStatus(result);
@@ -1318,12 +1350,13 @@ export function AispbApp() {
     ]);
     void playRoundFeedback(result === "timeout" ? "timeout" : "incorrect");
 
-    window.setTimeout(() => {
-      advanceWord();
-    }, 1900);
+    // No auto-advance — user taps "Next word" after reviewing the reveal card
   }
 
   const tick = useEffectEvent(() => {
+    // Don't tick while the reveal card is showing (miss or correct)
+    if (roundLockedRef.current) return;
+
     setSecondsLeft((previous) => {
       if (previous <= 1) {
         void registerMiss("timeout", attemptDraft.trim());
@@ -1479,11 +1512,28 @@ export function AispbApp() {
       !p.dueOn || p.dueOn <= todayKey
         ? "due now"
         : `due ${p.dueOn}`;
+    const isExpanded = expandedNotebookWords.has(entry.word.id);
+    const cachedCue = dictionaryCache[entry.word.id];
+    const def = cachedCue?.definition || entry.word.definition;
+    const sent = cachedCue?.sentence || entry.word.sentence;
+    const orig = cachedCue?.origin || entry.word.origin;
+    const hasDetails = Boolean(def || sent || orig);
 
     return (
       <article
         key={entry.word.id}
-        className="rounded-[22px] border border-[color:var(--line)] bg-white/72 p-4"
+        className={`rounded-[22px] border border-[color:var(--line)] bg-white/72 p-4 ${hasDetails ? "cursor-pointer" : ""}`}
+        onClick={
+          hasDetails
+            ? () =>
+                setExpandedNotebookWords((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(entry.word.id)) next.delete(entry.word.id);
+                  else next.add(entry.word.id);
+                  return next;
+                })
+            : undefined
+        }
       >
         <div className="flex items-center justify-between gap-3">
           <p className="font-[family:var(--font-display)] text-2xl text-[color:var(--foreground)]">
@@ -1501,7 +1551,32 @@ export function AispbApp() {
         <div className="mt-3 flex flex-wrap gap-2">
           <span className="badge">{p.correctCount}/{p.seenCount} correct</span>
           <span className="badge">streak {p.currentStreak}</span>
+          {hasDetails ? (
+            <span className="badge">{isExpanded ? "tap to collapse" : "tap for details"}</span>
+          ) : null}
         </div>
+        {isExpanded ? (
+          <div className="mt-3 space-y-1.5 border-t border-[color:var(--line)]/40 pt-3">
+            {def ? (
+              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                <span className="font-semibold">Definition: </span>
+                {def}
+              </p>
+            ) : null}
+            {sent ? (
+              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                <span className="font-semibold">Sentence: </span>
+                {sent}
+              </p>
+            ) : null}
+            {orig ? (
+              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                <span className="font-semibold">Origin: </span>
+                {orig}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </article>
     );
   }
@@ -1645,9 +1720,45 @@ export function AispbApp() {
                         : "miss"}
                   </span>
                 </div>
-                <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                  {currentWord.coachingNote ?? ""}
-                </p>
+
+                {status !== "correct" && (() => {
+                  const cue = currentDictionaryCue;
+                  const def = cue?.definition || currentWord.definition;
+                  const sent = cue?.sentence || currentWord.sentence;
+                  const orig = cue?.origin || currentWord.origin;
+                  return (def || sent || orig) ? (
+                    <div className="mt-3 space-y-2 border-t border-[color:var(--line)]/50 pt-3">
+                      {def ? (
+                        <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                          <span className="font-semibold">Definition: </span>
+                          {def}
+                        </p>
+                      ) : null}
+                      {sent ? (
+                        <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                          <span className="font-semibold">Sentence: </span>
+                          {sent}
+                        </p>
+                      ) : null}
+                      {orig ? (
+                        <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                          <span className="font-semibold">Origin: </span>
+                          {orig}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null;
+                })()}
+
+                {status !== "correct" ? (
+                  <button
+                    className="primary-button mt-4 w-full"
+                    onClick={() => advanceWord()}
+                    type="button"
+                  >
+                    Next word
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
@@ -1980,6 +2091,63 @@ export function AispbApp() {
                 Review notebook
               </a>
             </div>
+
+            {sessionMisses.length > 0 ? (
+              <div className="mt-6">
+                <p className="eyebrow">
+                  Missed words ({sessionMisses.length})
+                </p>
+                <div className="mt-3 space-y-3">
+                  {sessionMisses.map((miss) => {
+                    const def =
+                      miss.cue?.definition || miss.word.definition;
+                    const sent =
+                      miss.cue?.sentence || miss.word.sentence;
+                    const orig =
+                      miss.cue?.origin || miss.word.origin;
+                    return (
+                      <article
+                        key={miss.word.id}
+                        className="rounded-[22px] border border-[color:var(--signal)]/30 bg-[color:var(--signal)]/5 p-4"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-[family:var(--font-display)] text-xl text-[color:var(--foreground)]">
+                            {miss.word.word}
+                          </p>
+                          {miss.attempt ? (
+                            <span className="rounded-full bg-[color:var(--signal)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--signal)]">
+                              typed: {miss.attempt}
+                            </span>
+                          ) : null}
+                        </div>
+                        {(def || sent || orig) ? (
+                          <div className="mt-3 space-y-1.5 border-t border-[color:var(--line)]/40 pt-3">
+                            {def ? (
+                              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                                <span className="font-semibold">Definition: </span>
+                                {def}
+                              </p>
+                            ) : null}
+                            {sent ? (
+                              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                                <span className="font-semibold">Sentence: </span>
+                                {sent}
+                              </p>
+                            ) : null}
+                            {orig ? (
+                              <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                                <span className="font-semibold">Origin: </span>
+                                {orig}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-4">
