@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 import {
   getVoiceTurnProviderStatus,
   interpretVoiceTurnFromAudio,
+  interpretVoiceTurnFromPcm,
   interpretVoiceTurnFromTranscript,
 } from "@/lib/voice-turn";
 
@@ -20,7 +22,7 @@ export async function GET() {
   return NextResponse.json(getVoiceTurnProviderStatus());
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const contentType = request.headers.get("content-type") || "";
 
   const contentLength = request.headers.get("content-length");
@@ -32,6 +34,28 @@ export async function POST(request: Request) {
   }
 
   try {
+    // PCM 16kHz mono binary from client-side AudioContext conversion
+    const format = request.nextUrl.searchParams.get("format");
+    if (format === "pcm16k" && contentType.includes("application/octet-stream")) {
+      const pcmBuffer = Buffer.from(await request.arrayBuffer());
+
+      if (pcmBuffer.length === 0) {
+        return NextResponse.json(
+          { error: "Empty PCM audio buffer." },
+          { status: 400 },
+        );
+      }
+
+      if (pcmBuffer.length > MAX_AUDIO_SIZE) {
+        return NextResponse.json(
+          { error: `Audio exceeds maximum size of ${MAX_AUDIO_SIZE / (1024 * 1024)} MB.` },
+          { status: 413 },
+        );
+      }
+
+      return NextResponse.json(await interpretVoiceTurnFromPcm(pcmBuffer));
+    }
+
     if (contentType.includes("application/json")) {
       const body = (await request.json()) as VoiceTurnRequestBody;
 

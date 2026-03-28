@@ -583,6 +583,37 @@ async function routeTranscriptBestEffort(
   return fallbackInterpretTranscript(transcript);
 }
 
+/**
+ * Handle pre-converted PCM 16kHz mono audio (converted client-side via
+ * AudioContext).  This path avoids the need for ffmpeg on the server.
+ */
+export async function interpretVoiceTurnFromPcm(
+  pcmBuffer: Buffer,
+): Promise<VoiceTurnResultPayload> {
+  // iFlytek path
+  if (hasIflytekAsrConfig()) {
+    try {
+      const transcript = await transcribeWithIflytek(pcmBuffer, {
+        language: "en_us",
+      });
+
+      return await routeTranscriptBestEffort(transcript);
+    } catch (error) {
+      console.error("iflytek pcm transcription error", error);
+    }
+  }
+
+  // OpenAI can't accept raw PCM, so fall back to empty
+  return {
+    confidence: "low",
+    intent: "clarify",
+    normalizedLetters: "",
+    provider: "Voice capture fallback (PCM without iFlytek)",
+    transcript: "",
+    usedCloud: false,
+  };
+}
+
 export async function interpretVoiceTurnFromAudio(args: {
   audioBuffer: ArrayBuffer;
   contentType: string;
