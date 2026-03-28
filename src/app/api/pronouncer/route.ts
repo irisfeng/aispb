@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
+  hasIflytekTtsConfig,
+  synthesizeWithIflytekTts,
+} from "@/lib/iflytek-tts";
+import {
   getPronouncerErrorPayload,
   getPronouncerProviderStatus,
   hasVolcengineSpeechConfig,
@@ -16,8 +20,48 @@ interface PronouncerRequestBody {
   text?: string;
 }
 
+function hasAnyTtsConfig(): boolean {
+  return hasVolcengineSpeechConfig() || hasIflytekTtsConfig();
+}
+
 export async function GET() {
-  return NextResponse.json(getPronouncerProviderStatus());
+  const status = getPronouncerProviderStatus();
+
+  // Augment status if iFlytek TTS is available as fallback
+  if (!hasVolcengineSpeechConfig() && hasIflytekTtsConfig()) {
+    return NextResponse.json({
+      ...status,
+      configured: true,
+      detail: "iFlytek Online TTS is active.",
+      provider: "iFlytek Online TTS",
+    });
+  }
+
+  return NextResponse.json(status);
+}
+
+/**
+ * Build a binary audio response from a synthesis result.
+ */
+function audioResponse(result: {
+  audioBuffer: Buffer;
+  contentType: string;
+  provider: string;
+  speaker: string;
+  durationSeconds: number | null;
+}) {
+  return new NextResponse(new Uint8Array(result.audioBuffer), {
+    headers: {
+      "content-type": result.contentType,
+      "cache-control": "no-store",
+      "x-aispb-provider": result.provider,
+      "x-aispb-speaker": result.speaker,
+      "x-aispb-duration-seconds":
+        result.durationSeconds === null
+          ? ""
+          : String(result.durationSeconds),
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -63,43 +107,51 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!hasVolcengineSpeechConfig()) {
-    const status = getPronouncerProviderStatus();
-
+  if (!hasAnyTtsConfig()) {
     return NextResponse.json(
       {
-        detail: status.detail,
+        detail: "No TTS provider configured. Add Volcengine or iFlytek credentials.",
         error: "Pronouncer provider is not configured.",
       },
       { status: 503 },
     );
   }
 
-  try {
-    const result = await synthesizeWithVolcengineSpeech(text);
-    const audioBytes = new Uint8Array(result.audioBuffer);
-
-    return new NextResponse(audioBytes, {
-      headers: {
-        "content-type": result.contentType,
-        "cache-control": "no-store",
-        "x-aispb-provider": result.provider,
-        "x-aispb-speaker": result.speaker,
-        "x-aispb-duration-seconds":
-          result.durationSeconds === null ? "" : String(result.durationSeconds),
-      },
-    });
-  } catch (error) {
-    console.error("pronouncer synthesis failed", error);
-
-    const errorPayload = getPronouncerErrorPayload(error);
-
-    return NextResponse.json(
-      {
-        detail: errorPayload.detail,
-        error: errorPayload.error,
-      },
-      { status: errorPayload.statusCode },
-    );
+  // Try Volcengine first, fall back to iFlytek
+  if (hasVolcengineSpeechConfig()) {
+    try {
+      const result = await synthesizeWithVolcengineSpeech(text);
+      return audioResponse(result);
+    } catch (error) {
+      console.error("volcengine tts failed, trying iflytek fallback", error);
+      // Fall through to iFlytek
+    }
   }
+
+  // iFlytek TTS
+  if (hasIflytekTtsConfig()) {
+    try {
+      const result = await synthesizeWithIflytekTts(text);
+      return audioResponse(result);
+    } catch (error) {
+      console.error("iflytek tts failed", error);
+
+      return NextResponse.json(
+        {
+          detail: error instanceof Error ? error.message : "Unknown error",
+          error: "iFlytek TTS synthesis failed.",
+        },
+        { status: 502 },
+      );
+    }
+  }
+
+  const errorPayload = getPronouncerErrorPayload(
+    new Error("All TTS providers failed."),
+  );
+
+  return NextResponse.json(
+    { detail: errorPayload.detail, error: errorPayload.error },
+    { status: errorPayload.statusCode },
+  );
 }
