@@ -19,3 +19,17 @@
 ## 2026-03-24
 
 1. Child-facing feedback audio must be gentle and sequenced; harsh synthetic waveforms or overlapping earcon-plus-speech playback can feel scary even when the logic is technically correct.
+
+## 2026-03-28
+
+1. Spaced-repetition miss scheduling must push `dueOn` to tomorrow (`addDays(todayKey, 1)`), not same-day (`todayKey`); same-day due means the word reappears immediately in the next plan, which defeats the purpose of a rest interval.
+2. Spaced-repetition correct intervals should have graduated tiers (2 → 5 → 7 days by streak), not a binary jump; a single correct answer going straight to 3 days is too aggressive for a beginner.
+3. TTS `speechText` must go through `maskWordInVisibleText` the same way `displayText` does; otherwise the pronouncer literally speaks the answer word aloud through the speaker.
+4. `localStorage` data cannot be trusted at runtime — `readJson<T>` only casts, it does not validate; production code needs runtime type guards that fall back to defaults when the shape is wrong.
+5. API routes that accept user input (pronouncer text, voice-turn audio/transcript) need content-length caps and type validation before any processing; without them, a single large payload can burn cloud credits or crash the server.
+6. `hasVoiceTurnConfig` must gate on the transcription key (`OPENAI_API_KEY`), not just the LLM router key; without Whisper, audio recordings hit a dead end and the client takes a cloud path that cannot succeed.
+7. Async voice results that resolve after a round resolves (timer fires, advance fires) can corrupt the next round unless guarded by a captured round ID check at each decision point.
+8. `MediaRecorder.onstop` fires even when `stop()` is called during Start Over; a suppression flag is needed to distinguish intentional cancellation from natural end-of-recording.
+9. `bestStreak` is a session-level stat and must be reset in `beginSession`, not just `advanceWord`; otherwise it carries across drills.
+10. Write-only state variables (like `agentTranscript` that was set but never read) are dead weight and should be removed; they add render cycles and confuse future readers.
+11. Cloud integrations and voice pipeline code should be separated from bug-fix commits for clean git history; mixed commits make bisect and revert harder.

@@ -58,6 +58,21 @@
 - [x] Add success / miss earcons plus spoken feedback for correct, incorrect, timeout, and reset events.
 - [x] Soften and serialize feedback earcons so child-facing audio does not startle or overlap with speech playback.
 - [x] Prevent the target word from appearing anywhere in the live UI before the round resolves, even when the pronouncer repeats it aloud.
+- [x] Run automated code review (Codex gpt-5.4 xhigh) against the full codebase and address all findings.
+- [x] Fix spaced-repetition miss scheduling (dueOn=todayKey → addDays(todayKey, 1)) and widen correct tiers to 2/5/7 days.
+- [x] Mask target word in speechText for definition/sentence/origin TTS to prevent answer leaks.
+- [x] Add round ID guards and stale-result checks to prevent race conditions in handleVoiceTurnResult.
+- [x] Suppress MediaRecorder onstop during Start Over to avoid submitting cancelled recordings.
+- [x] Memoize previewPlan and notebookEntries to prevent expensive recomputation on every render.
+- [x] Reset bestStreak in beginSession so it does not carry across drills.
+- [x] Remove write-only agentTranscript state and its setter calls.
+- [x] Add content-length limits, text length caps, and input type validation to pronouncer and voice-turn API routes.
+- [x] Separate hasVoiceTurnConfig (requires OPENAI_API_KEY) from LLM intent config to prevent false cloud-readiness.
+- [x] Validate localStorage data at load time with runtime type guards for DrillSettings and ProgressMap.
+- [x] Reserve minimum 5 fresh word slots in daily plan and weight harder words earlier in the queue.
+- [x] Expand word bank from 28 seed words to ~3400 competition-level words from official middle-school vocabulary PDF.
+- [x] Make DrillWord optional fields nullable so expanded bank works without full definitions for every entry.
+- [x] Add runtime null-safety for coaching notes, pronunciation notes, definitions, origins, and sentences in local adapters.
 - [ ] Refactor the oversized client round logic into smaller speech, judging, and presentation modules before adding the new pipeline.
 - [ ] Add a cartoon-cute visual refresh for the live round after the interaction and correctness changes are stable.
 - [ ] Integrate a production coach provider.
@@ -108,3 +123,12 @@
 40. The live round no longer exposes the target word before resolution: the round card stays on `Word 01` style labels, repeat prompts stay text-safe, and transcript/feed rendering masks the word until reveal.
 41. Verification for this pass included `npm run typecheck`, `npm run lint`, `npm run build`, `curl` checks for `GET/POST /api/voice-turn`, and a Playwright smoke flow confirming the round screen and `Repeat` action do not reveal the target word in visible UI.
 42. Feedback earcons now use softer sine-wave chimes and wait for the chime to finish before spoken feedback starts, reducing the chance of a startling or garbled sound.
+43. Codex code review (gpt-5.4, xhigh reasoning) identified 12 issues across security, correctness, and performance categories; all 12 were fixed and verified with `typecheck + lint + build`.
+44. Voice-turn cloud readiness now gates on `OPENAI_API_KEY` (transcription) separately from `VOLC_LLM` keys (intent routing), preventing the client from taking a cloud recording path that cannot succeed.
+45. API routes now enforce content-length caps (10 KB text / 10 MB audio), text length limits (500/1000 chars), and input type validation before processing.
+46. localStorage data is validated at load time with runtime type guards for `DrillSettings` and `ProgressMap`, falling back to defaults on corruption.
+47. Spaced-repetition miss scheduling fixed from same-day (`todayKey`) to next-day (`addDays(todayKey, 1)`); correct-answer delays widened to graduated 2/5/7-day tiers by streak.
+48. Race condition in voice turn results guarded with captured round ID checks at each async decision point; Start Over now suppresses the recorder onstop callback.
+49. Word bank expanded from 28 seed words to ~3400 words from official competition PDF; `DrillWord` optional fields made nullable for incomplete entries.
+50. All changes split into 5 logical commits and pushed to `origin/main`: voice-turn feature, talk flow + word bank, security/validation fixes, env config, AI assistant config.
+51. Verification pipeline: `npm run typecheck` (0 source errors), `npm run lint` (0 warnings), `npm run build` (7/7 static pages generated).
