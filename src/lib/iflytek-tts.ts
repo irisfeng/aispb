@@ -25,7 +25,7 @@ const WS_HOST_DOMESTIC = "tts-api.xfyun.cn";
 const WS_HOST_GLOBAL = "tts-api-sg.xf-yun.com";
 const WS_PATH = "/v2/tts";
 
-const DEFAULT_SPEAKER = "x_Catherine";
+const DEFAULT_SPEAKER = "x4_enus_lucy_education";
 const DEFAULT_SAMPLE_RATE = 16000;
 const PROVIDER_LABEL = "iFlytek Online TTS";
 
