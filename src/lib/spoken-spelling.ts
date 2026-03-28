@@ -32,6 +32,7 @@ const spokenLetterMap: Record<string, string> = {
   are: "r",
   ar: "r",
   ay: "a",
+  aye: "i",
   be: "b",
   bee: "b",
   bravo: "b",
@@ -45,7 +46,13 @@ const spokenLetterMap: Record<string, string> = {
   echo: "e",
   ef: "f",
   eff: "f",
+  el: "l",
+  ell: "l",
+  em: "m",
+  en: "n",
+  es: "s",
   ex: "x",
+  eye: "i",
   f: "f",
   foxtrot: "f",
   g: "g",
@@ -254,13 +261,42 @@ export function normalizeSpokenSpellingAttempt(
     usedWholeWordFallback = true;
   }
 
+  // Secondary fallback: when letter parsing captured a few letters but
+  // speech recognition also emitted the full word as a single token
+  // (e.g. "e s p especially"), the partial letters are wrong.  Pick the
+  // longest unknown token that looks like a whole word instead.
+  if (
+    options.allowWholeWordFallback &&
+    !usedWholeWordFallback &&
+    unknownTokenCount > 0
+  ) {
+    let longestUnknownWord = "";
+
+    for (const token of tokens) {
+      if (
+        !fillerTokens.has(token) &&
+        !mapTokenToLetter(token) &&
+        token.length >= 3 &&
+        /^[a-z]+$/.test(token) &&
+        token.length > longestUnknownWord.length
+      ) {
+        longestUnknownWord = token;
+      }
+    }
+
+    if (longestUnknownWord && longestUnknownWord.length > candidate.length) {
+      candidate = longestUnknownWord;
+      usedWholeWordFallback = true;
+    }
+  }
+
   const looksLikeSpelling =
     command === "start-over" ||
     usedWholeWordFallback ||
+    (Boolean(candidate) && recognizedTokenCount >= 2 && unknownTokenCount === 0) ||
     (Boolean(candidate) &&
-      ((recognizedTokenCount >= 2 && unknownTokenCount === 0) ||
-        (candidate.length >= 3 &&
-          recognizedTokenCount >= Math.max(2, unknownTokenCount * 2))));
+      candidate.length >= 2 &&
+      recognizedTokenCount >= Math.max(1, unknownTokenCount));
 
   return {
     candidate,

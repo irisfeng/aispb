@@ -24,7 +24,7 @@
 
 1. Spaced-repetition miss scheduling must push `dueOn` to tomorrow (`addDays(todayKey, 1)`), not same-day (`todayKey`); same-day due means the word reappears immediately in the next plan, which defeats the purpose of a rest interval.
 2. Spaced-repetition correct intervals should have graduated tiers (2 → 5 → 7 days by streak), not a binary jump; a single correct answer going straight to 3 days is too aggressive for a beginner.
-3. TTS `speechText` must go through `maskWordInVisibleText` the same way `displayText` does; otherwise the pronouncer literally speaks the answer word aloud through the speaker.
+3. In a Bee, the pronouncer speaks the target word in definitions, sentences, and origin — that's standard. Only `displayText` should be masked (prevent visual cheating); `speechText` must contain the real word so TTS reads naturally. Masking speechText causes TTS to skip or stumble on "•••••".
 4. `localStorage` data cannot be trusted at runtime — `readJson<T>` only casts, it does not validate; production code needs runtime type guards that fall back to defaults when the shape is wrong.
 5. API routes that accept user input (pronouncer text, voice-turn audio/transcript) need content-length caps and type validation before any processing; without them, a single large payload can burn cloud credits or crash the server.
 6. `hasVoiceTurnConfig` must gate on the transcription key (`OPENAI_API_KEY`), not just the LLM router key; without Whisper, audio recordings hit a dead end and the client takes a cloud path that cannot succeed.

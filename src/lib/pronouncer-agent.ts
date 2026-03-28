@@ -186,26 +186,33 @@ function buildAllInfoCopy(word: DrillWord, cue: DictionaryCuePayload | null) {
   const sentence = cue?.sentence ?? word.sentence ?? "";
   const origin = cue?.origin ?? word.origin ?? "";
 
-  const segments: string[] = [];
+  const speechSegments: string[] = [];
+  const displayHints: string[] = [];
 
   if (definition) {
-    segments.push(`The definition is: ${maskWordInVisibleText(definition, word)}`);
+    speechSegments.push(`The definition is: ${definition}`);
+    displayHints.push("definition");
   }
   if (partOfSpeech) {
-    segments.push(`It's a ${partOfSpeech}.`);
+    speechSegments.push(`It's a ${partOfSpeech}.`);
+    displayHints.push("part of speech");
   }
   if (sentence) {
-    segments.push(`Here is a sentence: ${maskWordInVisibleText(sentence, word)}`);
+    speechSegments.push(`Here is a sentence: ${sentence}`);
+    displayHints.push("sentence");
   }
   if (origin) {
-    segments.push(`The origin is ${maskWordInVisibleText(origin, word)}`);
+    speechSegments.push(`The origin is ${origin}`);
+    displayHints.push("origin");
   }
 
-  const combined = segments.join(" ");
+  const displayText = displayHints.length
+    ? `All info read aloud (${displayHints.join(", ")}).`
+    : "No additional information is available.";
 
   return {
-    displayText: combined || "No additional information is available.",
-    speechText: combined || "No additional information is available.",
+    displayText,
+    speechText: speechSegments.join(" ") || "No additional information is available.",
   };
 }
 
@@ -248,8 +255,8 @@ export function buildPronouncerAgentReply(args: {
       const full = `${prefix} ${definitionRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(full, word),
-        speechText: maskWordInVisibleText(full, word),
+        displayText: "Definition read aloud.",
+        speechText: full,
         promptKind: "definition",
         tone: "hint",
       };
@@ -273,8 +280,8 @@ export function buildPronouncerAgentReply(args: {
       const full = `${prefix} ${sentenceRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(full, word),
-        speechText: maskWordInVisibleText(full, word),
+        displayText: "Sentence read aloud.",
+        speechText: full,
         promptKind: "sentence",
         tone: "hint",
       };
@@ -298,8 +305,8 @@ export function buildPronouncerAgentReply(args: {
       const full = `${prefix} ${originRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(full, word),
-        speechText: maskWordInVisibleText(full, word),
+        displayText: "Origin read aloud.",
+        speechText: full,
         promptKind: "origin",
         tone: "hint",
       };

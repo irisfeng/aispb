@@ -326,8 +326,6 @@ export function AispbApp() {
   const speechRecognitionSupported =
     (cloudVoiceTurnAvailable && browserRecordingSupported) ||
     Boolean(getSpeechRecognitionConstructor());
-  const shouldShowManualFallback =
-    !speechRecognitionSupported || speechCaptureState === "error";
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
@@ -1361,9 +1359,15 @@ export function AispbApp() {
       intentKind === "origin" ||
       intentKind === "part-of-speech" ||
       intentKind === "all-info";
-    const dictionaryCue = shouldResolveDictionaryCue
-      ? await resolveDictionaryCue()
-      : null;
+    let dictionaryCue: DictionaryCuePayload | null = null;
+
+    if (shouldResolveDictionaryCue) {
+      try {
+        dictionaryCue = await resolveDictionaryCue();
+      } catch (error) {
+        console.error("dictionary cue resolution failed", error);
+      }
+    }
     const reply = buildPronouncerAgentReply({
       intent: {
         kind: intentKind,
@@ -1653,24 +1657,40 @@ export function AispbApp() {
               </p>
             ) : null}
 
-            {shouldShowManualFallback ? (
-              <div className="mt-4 rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/60 p-4">
-                <label className="eyebrow" htmlFor="compact-utterance-fallback">
-                  Talk fallback
-                </label>
+            <div className="mt-4 rounded-[22px] border border-[color:var(--line)] bg-white/70 p-4">
+              <label className="eyebrow" htmlFor="spelling-keyboard-input">
+                Type spelling
+              </label>
+              <div className="mt-3 flex gap-2">
                 <input
-                  className="mt-3 w-full rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
-                  id="compact-utterance-fallback"
+                  className="min-w-0 flex-1 rounded-[20px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-3 text-base tracking-widest text-[color:var(--foreground)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent)]/12"
+                  id="spelling-keyboard-input"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
                   onChange={(event) => {
                     setManualUtteranceValue(event.target.value);
                   }}
-                  placeholder="definition / sentence / A U S P I C I O U S"
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      manualUtteranceValue.trim() &&
+                      sessionStarted &&
+                      !sessionComplete &&
+                      status === "idle"
+                    ) {
+                      const value = manualUtteranceValue.trim().toLowerCase().replace(/[^a-z]/g, "");
+                      setManualUtteranceValue("");
+                      void submitSpellingCandidate(value);
+                    }
+                  }}
+                  placeholder="Type the word here"
                   spellCheck={false}
                   type="text"
                   value={manualUtteranceValue}
                 />
                 <button
-                  className="secondary-button mt-3 justify-center"
+                  className="action-button min-h-10 rounded-full px-5"
                   disabled={
                     !sessionStarted ||
                     sessionComplete ||
@@ -1678,16 +1698,16 @@ export function AispbApp() {
                     !manualUtteranceValue.trim()
                   }
                   onClick={() => {
-                    void handleUnifiedUtterance(manualUtteranceValue).finally(() => {
-                      setManualUtteranceValue("");
-                    });
+                    const value = manualUtteranceValue.trim().toLowerCase().replace(/[^a-z]/g, "");
+                    setManualUtteranceValue("");
+                    void submitSpellingCandidate(value);
                   }}
                   type="button"
                 >
-                  Send utterance
+                  Submit
                 </button>
               </div>
-            ) : null}
+            </div>
 
             <div className="mt-4 space-y-2">
               {recentFeed.map((entry) => (

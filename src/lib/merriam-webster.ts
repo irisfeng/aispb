@@ -134,9 +134,9 @@ export async function lookupMerriamWebsterWord(word: string) {
       headers: {
         Accept: "application/json",
       },
-      next: {
-        revalidate: 86400,
-      },
+      // Disable Next.js Data Cache — avoids caching error/empty responses
+      // for hours.  The dictionary route has its own client-side cache.
+      cache: "no-store",
     },
   );
 
