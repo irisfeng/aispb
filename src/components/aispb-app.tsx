@@ -311,6 +311,8 @@ export function AispbApp() {
       tone: "system",
     },
   ]);
+  const [feedExpanded, setFeedExpanded] = useState(false);
+  const [notebookPageSize, setNotebookPageSize] = useState(10);
 
   const todayKey = getTodayKey();
   const previewPlan = useMemo(
@@ -1291,6 +1293,16 @@ export function AispbApp() {
       if (currentIndex === activePlan.words.length - 1) {
         setSessionComplete(true);
         setSessionStarted(false);
+        setFeedExpanded(false);
+        setNotebookPageSize(10);
+
+        // Auto-scroll to results after render
+        requestAnimationFrame(() => {
+          document
+            .getElementById("session")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+
         setFeed((previous) => [
           createFeedEntry(
             "Session complete",
@@ -1902,7 +1914,7 @@ export function AispbApp() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="eyebrow">AISPB</p>
-              <h1 className="display-copy mt-3 max-w-md text-4xl sm:text-5xl">
+              <h1 className={`display-copy mt-3 max-w-md text-4xl sm:text-5xl ${sessionComplete ? "hidden sm:block" : ""}`}>
                 Daily spelling drills with a real review loop behind them.
               </h1>
             </div>
@@ -1911,14 +1923,14 @@ export function AispbApp() {
             </div>
           </div>
 
-          <p className="mt-5 max-w-xl text-sm leading-7 text-[color:var(--muted)] sm:text-base">
+          <p className={`mt-5 max-w-xl text-sm leading-7 text-[color:var(--muted)] sm:text-base ${sessionComplete ? "hidden sm:block" : ""}`}>
             The app now generates a daily plan from a seeded word bank, keeps a
             browser-side notebook, routes dictionary requests through
             Merriam-Webster when configured, and can switch the pronouncer to
             Volcengine Doubao Speech TTS.
           </p>
 
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className={`mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 ${sessionComplete ? "hidden sm:grid" : ""}`}>
             <div className="stat-card">
               <span className="stat-label">Deck</span>
               <strong>{previewPlan.words.length} words</strong>
@@ -1938,7 +1950,7 @@ export function AispbApp() {
           </div>
 
           <div className="mt-7 flex flex-col gap-4">
-            <div className="rounded-[28px] border border-[color:var(--line)] bg-white/72 p-4">
+            <div className={`rounded-[28px] border border-[color:var(--line)] bg-white/72 p-4 ${sessionComplete ? "hidden sm:block" : ""}`}>
               <div className="flex items-center justify-between gap-3">
                 <p className="eyebrow">Settings</p>
                 <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
@@ -2205,7 +2217,7 @@ export function AispbApp() {
               </div>
 
               <div className="mt-4 space-y-3">
-                {feed.slice(0, 5).map((entry) => (
+                {feed.slice(0, feedExpanded ? feed.length : 3).map((entry) => (
                   <article
                     key={entry.id}
                     className={`rounded-[22px] border p-4 ${feedToneClass[entry.tone]}`}
@@ -2216,6 +2228,15 @@ export function AispbApp() {
                     <p className="mt-2 text-sm leading-6">{entry.content}</p>
                   </article>
                 ))}
+                {!feedExpanded && feed.length > 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setFeedExpanded(true)}
+                    className="w-full rounded-full border border-[color:var(--line)] bg-white/50 py-2 text-xs font-semibold text-[color:var(--muted)] transition-colors hover:bg-white/80"
+                  >
+                    Show {feed.length - 3} more entries
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -2256,7 +2277,7 @@ export function AispbApp() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setNotebookFilter(tab)}
+                      onClick={() => { setNotebookFilter(tab); setNotebookPageSize(10); }}
                       className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
                         isActive
                           ? "bg-[color:var(--accent)] text-white"
@@ -2269,7 +2290,7 @@ export function AispbApp() {
                 })}
               </div>
 
-              <div className="mt-4 max-h-[70vh] space-y-3 overflow-y-auto">
+              <div className="mt-4 space-y-3">
                 {filteredNotebookEntries.length === 0 ? (
                   <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
                     {notebookEntries.length === 0
@@ -2277,8 +2298,17 @@ export function AispbApp() {
                       : "No words match this filter."}
                   </div>
                 ) : (
-                  filteredNotebookEntries.map(renderNotebookEntry)
+                  filteredNotebookEntries.slice(0, notebookPageSize).map(renderNotebookEntry)
                 )}
+                {filteredNotebookEntries.length > notebookPageSize ? (
+                  <button
+                    type="button"
+                    onClick={() => setNotebookPageSize((prev) => prev + 10)}
+                    className="w-full rounded-full border border-[color:var(--line)] bg-white/50 py-2 text-xs font-semibold text-[color:var(--muted)] transition-colors hover:bg-white/80"
+                  >
+                    Show 10 more ({filteredNotebookEntries.length - notebookPageSize} remaining)
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
