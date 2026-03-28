@@ -2227,9 +2227,20 @@ export function AispbApp() {
                     Practice review
                   </h3>
                 </div>
-                <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
-                  {notebookEntries.length} tracked
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
+                    {notebookEntries.length} tracked
+                  </span>
+                  {dueNotebookCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={beginSession}
+                      className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[color:var(--accent)]/85"
+                    >
+                      Practice
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
               <div className="mt-4 flex gap-2 overflow-x-auto">
@@ -2258,7 +2269,7 @@ export function AispbApp() {
                 })}
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 max-h-[70vh] space-y-3 overflow-y-auto">
                 {filteredNotebookEntries.length === 0 ? (
                   <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
                     {notebookEntries.length === 0
@@ -2266,7 +2277,7 @@ export function AispbApp() {
                       : "No words match this filter."}
                   </div>
                 ) : (
-                  filteredNotebookEntries.slice(0, 10).map(renderNotebookEntry)
+                  filteredNotebookEntries.map(renderNotebookEntry)
                 )}
               </div>
             </div>

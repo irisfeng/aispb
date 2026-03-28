@@ -183,7 +183,7 @@ export async function transcribeWithIflytek(
             domain: "iat",
             accent: "mandarin",
             ptt: 0, // disable auto punctuation for letter spelling
-            vad_eos: 3000, // 3s end-of-speech timeout
+            eos: 3000, // 3s end-of-speech timeout
           };
         }
 
