@@ -15,3 +15,7 @@
 11. In a Bee-style oral round, spoken prompt requests such as “definition” or “use it in a sentence” must be classified as pronouncer dialogue, not fed into the spelling judge; the pronouncer experience needs an agent-like dialogue layer, not a flat button board.
 12. Even when the round logic is correct, the product still fails if the interaction feels like a debugging console; a mobile Bee app has to hide mode machinery and keep the live round down to the smallest possible number of obvious actions.
 13. The ask-vs-spell distinction belongs inside the intent router, not in two sibling primary buttons; if the UI exposes mode management to the user, it still feels wrong even when the routing logic is correct.
+
+## 2026-03-24
+
+1. Child-facing feedback audio must be gentle and sequenced; harsh synthetic waveforms or overlapping earcon-plus-speech playback can feel scary even when the logic is technically correct.

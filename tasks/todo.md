@@ -51,6 +51,15 @@
 - [x] Simplify the overall mobile surface so the live round reads like one focused card instead of multiple tool panels.
 - [x] Re-investigate the current pronouncer onset artifact and harden the cloud audio parsing/trim path against noisy V3 pre-roll.
 - [x] Replace the exposed `Ask pronouncer` / `Spell answer` split with a single primary talk action that routes intent internally.
+- [x] Rebuild the spoken round around a server-routed voice pipeline: ASR -> dialogue / spelling router -> guarded reply generation -> TTS.
+- [x] Add scenario-aware ASR handling for spelling mode versus free-form Bee dialogue, including stronger guardrails for disallowed clue requests.
+- [x] Change respell behavior so a fresh spelling attempt replaces the previously locked letters instead of appending ambiguously.
+- [x] Grade spelling letter-by-letter so any wrong letter is immediately treated as an incorrect attempt.
+- [x] Add success / miss earcons plus spoken feedback for correct, incorrect, timeout, and reset events.
+- [x] Soften and serialize feedback earcons so child-facing audio does not startle or overlap with speech playback.
+- [x] Prevent the target word from appearing anywhere in the live UI before the round resolves, even when the pronouncer repeats it aloud.
+- [ ] Refactor the oversized client round logic into smaller speech, judging, and presentation modules before adding the new pipeline.
+- [ ] Add a cartoon-cute visual refresh for the live round after the interaction and correctness changes are stable.
 - [ ] Integrate a production coach provider.
 - [ ] Replace local seed data with the cleaned canonical word source.
 - [ ] Upgrade browser-only persistence to a syncable data layer.
@@ -93,3 +102,9 @@
 34. The live round now exposes a single `Talk` primary action and keeps intent routing internal, so users no longer have to choose between `Ask pronouncer` and `Spell answer` before speaking.
 35. Verification for the single-action pass included `npm run lint`, `npm run typecheck`, `npm run build`, and a Playwright smoke flow against a local production instance confirming `Begin today's drill` leads to a round with one `Talk` button plus rule-safe clue chips, and `Definition` still routes through the pronouncer path.
 36. Development and test records for the single-action talk-flow pass are now explicitly marked in the dated local memory log for audit and morning acceptance.
+37. The app now includes a server-side `voice-turn` route that can transcribe audio and run model-based intent routing when `OPENAI_API_KEY` is configured, while still falling back locally when it is not.
+38. Spoken attempt grading is now strict letter-by-letter, so a wrong, missing, or extra letter resolves the round as incorrect instead of drifting through fuzzy matching.
+39. The round now plays earcons plus short spoken feedback for correct, incorrect, timeout, and start-over events.
+40. The live round no longer exposes the target word before resolution: the round card stays on `Word 01` style labels, repeat prompts stay text-safe, and transcript/feed rendering masks the word until reveal.
+41. Verification for this pass included `npm run typecheck`, `npm run lint`, `npm run build`, `curl` checks for `GET/POST /api/voice-turn`, and a Playwright smoke flow confirming the round screen and `Repeat` action do not reveal the target word in visible UI.
+42. Feedback earcons now use softer sine-wave chimes and wait for the chime to finish before spoken feedback starts, reducing the chance of a startling or garbled sound.
