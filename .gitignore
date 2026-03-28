@@ -15,3 +15,4 @@ tsconfig.tsbuildinfo
 .env.production.local
 .claude/worktrees/
 task_plan.md
+.vercel

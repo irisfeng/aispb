@@ -2,6 +2,8 @@ import {
   classifyPronouncerAgentIntent,
   type PronouncerAgentIntentKind,
 } from "@/lib/pronouncer-agent";
+import { convertToPcm16kMono } from "@/lib/audio-convert";
+import { hasIflytekAsrConfig, transcribeWithIflytek } from "@/lib/iflytek-asr";
 import { normalizeSpokenSpellingAttempt } from "@/lib/spoken-spelling";
 import type { DrillPromptKind } from "@/lib/types";
 
@@ -77,11 +79,11 @@ function hasVolcLlmConfig(): boolean {
 
 /**
  * True when the full cloud audio pipeline can work: audio transcription
- * (OpenAI) plus intent routing (Volc LLM or OpenAI).  The client uses this
+ * (OpenAI or iFlytek) plus intent routing.  The client uses this
  * to decide whether to take the cloud recording path.
  */
 export function hasVoiceTurnConfig() {
-  return Boolean(getOpenAiApiKey());
+  return Boolean(getOpenAiApiKey()) || hasIflytekAsrConfig();
 }
 
 /**
@@ -94,15 +96,17 @@ export function hasVoiceTurnTranscriptConfig() {
 }
 
 export function getVoiceTurnProviderStatus(): VoiceTurnStatusPayload {
-  const hasTranscription = Boolean(getOpenAiApiKey());
+  const hasOpenAiTranscription = Boolean(getOpenAiApiKey());
+  const hasIflytekTranscription = hasIflytekAsrConfig();
+  const hasTranscription = hasOpenAiTranscription || hasIflytekTranscription;
 
   if (!hasTranscription) {
     const transcriptOnly = hasVolcLlmConfig();
     return {
       configured: false,
       detail: transcriptOnly
-        ? "Voice routing has a Volc LLM router but no OPENAI_API_KEY for audio transcription. Add OPENAI_API_KEY to enable cloud recording."
-        : "Cloud voice routing is off. Add OPENAI_API_KEY to enable audio transcription; add VOLC_LLM_API_KEY + VOLC_LLM_ENDPOINT_ID for server-side intent routing. Browser speech stays available as fallback.",
+        ? "Voice routing has a Volc LLM router but no transcription API. Add IFLYTEK_APP_ID/API_KEY/API_SECRET or OPENAI_API_KEY to enable cloud recording."
+        : "Cloud voice routing is off. Add IFLYTEK_APP_ID/API_KEY/API_SECRET (recommended) or OPENAI_API_KEY for audio transcription. Browser speech stays available as fallback.",
       provider: transcriptOnly
         ? "Volcengine Doubao (transcript-only, no transcription)"
         : "Browser speech fallback",
@@ -111,15 +115,26 @@ export function getVoiceTurnProviderStatus(): VoiceTurnStatusPayload {
     };
   }
 
-  const provider = hasVolcLlmConfig() ? "Volcengine Doubao" : "OpenAI";
-  const routerModel = hasVolcLlmConfig() ? getVolcLlmEndpointId() : OPENAI_ROUTER_MODEL;
+  const transcriptionProvider = hasIflytekTranscription
+    ? "iFlytek streaming ASR"
+    : OPENAI_TRANSCRIBE_MODEL;
+  const routerProvider = hasVolcLlmConfig()
+    ? "Volcengine Doubao"
+    : hasOpenAiTranscription
+      ? "OpenAI"
+      : "Local";
+  const routerModel = hasVolcLlmConfig()
+    ? getVolcLlmEndpointId()
+    : hasOpenAiTranscription
+      ? OPENAI_ROUTER_MODEL
+      : null;
 
   return {
     configured: true,
-    detail: `Cloud voice routing is ready via ${provider}.`,
-    provider: `${provider} voice router`,
+    detail: `Cloud voice routing is ready. Transcription: ${transcriptionProvider}. Router: ${routerProvider}.`,
+    provider: `${transcriptionProvider} + ${routerProvider} router`,
     routerModel,
-    transcriptionModel: OPENAI_TRANSCRIBE_MODEL,
+    transcriptionModel: transcriptionProvider,
   };
 }
 
@@ -524,9 +539,34 @@ export async function interpretVoiceTurnFromTranscript(
     };
   }
 
+  return routeTranscriptBestEffort(trimmedTranscript);
+}
+
+/**
+ * Transcribe audio using iFlytek streaming ASR.
+ *
+ * Converts WebM/Opus → PCM 16kHz mono via ffmpeg, then streams to iFlytek.
+ */
+async function transcribeAudioWithIflytek(args: {
+  audioBuffer: ArrayBuffer;
+  contentType: string;
+}): Promise<string> {
+  const pcmBuffer = await convertToPcm16kMono(args.audioBuffer);
+
+  return transcribeWithIflytek(pcmBuffer, { language: "en_us" });
+}
+
+/**
+ * Route a transcript through whichever LLM router is available.
+ *
+ * Priority: Volcengine Doubao → OpenAI → local fallback.
+ */
+async function routeTranscriptBestEffort(
+  transcript: string,
+): Promise<VoiceTurnResultPayload> {
   try {
     if (hasVolcLlmConfig()) {
-      return await routeTranscriptWithVolcDoubao(trimmedTranscript);
+      return await routeTranscriptWithVolcDoubao(transcript);
     }
   } catch (error) {
     console.error("volcengine doubao router fallback", error);
@@ -534,13 +574,13 @@ export async function interpretVoiceTurnFromTranscript(
 
   try {
     if (getOpenAiApiKey()) {
-      return await routeTranscriptWithOpenAi(trimmedTranscript);
+      return await routeTranscriptWithOpenAi(transcript);
     }
   } catch (error) {
     console.error("openai router fallback", error);
   }
 
-  return fallbackInterpretTranscript(trimmedTranscript);
+  return fallbackInterpretTranscript(transcript);
 }
 
 export async function interpretVoiceTurnFromAudio(args: {
@@ -548,20 +588,35 @@ export async function interpretVoiceTurnFromAudio(args: {
   contentType: string;
   filename: string;
 }): Promise<VoiceTurnResultPayload> {
-  try {
-    const transcript = await transcribeAudioWithOpenAi(args);
+  // Path 1: iFlytek transcription (preferred when configured)
+  if (hasIflytekAsrConfig()) {
+    try {
+      const transcript = await transcribeAudioWithIflytek(args);
 
-    return await routeTranscriptWithOpenAi(transcript);
-  } catch (error) {
-    console.error("voice turn audio fallback", error);
-
-    return {
-      confidence: "low",
-      intent: "clarify",
-      normalizedLetters: "",
-      provider: "Voice capture fallback",
-      transcript: "",
-      usedCloud: false,
-    };
+      return await routeTranscriptBestEffort(transcript);
+    } catch (error) {
+      console.error("iflytek transcription fallback", error);
+      // Fall through to OpenAI if available
+    }
   }
+
+  // Path 2: OpenAI Whisper transcription + routing
+  if (getOpenAiApiKey()) {
+    try {
+      const transcript = await transcribeAudioWithOpenAi(args);
+
+      return await routeTranscriptWithOpenAi(transcript);
+    } catch (error) {
+      console.error("openai voice turn fallback", error);
+    }
+  }
+
+  return {
+    confidence: "low",
+    intent: "clarify",
+    normalizedLetters: "",
+    provider: "Voice capture fallback",
+    transcript: "",
+    usedCloud: false,
+  };
 }
