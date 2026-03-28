@@ -243,6 +243,7 @@ declare global {
 
 export function AispbApp() {
   const [storageReady, setStorageReady] = useState(false);
+  const kvLoadedRef = useRef(false);
   const [settings, setSettings] = useState<DrillSettings>(defaultSettings);
   const [progress, setProgress] = useState<ProgressMap>({});
   const [activePlan, setActivePlan] = useState<DrillPlan | null>(null);
@@ -1096,7 +1097,9 @@ export function AispbApp() {
       );
       setStorageReady(true);
 
-      // Then try KV — if available, overwrite with server data
+      // Then try KV — if available, overwrite with server data.
+      // The kvLoadedRef guard prevents the save effects from writing
+      // stale/empty local data back to KV before the cloud data arrives.
       void Promise.all([loadSettingsFromKv(), loadProgressFromKv()])
         .then(([kvSettings, kvProgress]) => {
           if (kvSettings) {
@@ -1110,6 +1113,9 @@ export function AispbApp() {
         })
         .catch(() => {
           // KV unavailable — localStorage is fine
+        })
+        .finally(() => {
+          kvLoadedRef.current = true;
         });
 
       void fetchPronouncerStatus()
@@ -1161,7 +1167,12 @@ export function AispbApp() {
     }
 
     saveSettings(settings);
-    void saveSettingsToKv(settings);
+
+    // Only write to KV after the initial KV load completes to avoid
+    // overwriting cloud data with stale/empty local data.
+    if (kvLoadedRef.current) {
+      void saveSettingsToKv(settings);
+    }
   }, [settings, storageReady]);
 
   useEffect(() => {
@@ -1170,7 +1181,10 @@ export function AispbApp() {
     }
 
     saveProgress(progress);
-    void saveProgressToKv(progress);
+
+    if (kvLoadedRef.current) {
+      void saveProgressToKv(progress);
+    }
   }, [progress, storageReady]);
 
   useEffect(() => {
