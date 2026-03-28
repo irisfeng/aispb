@@ -4,23 +4,31 @@ import {
   startTransition,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
 } from "react";
 
 import { localCoachAdapter, providerCards } from "@/lib/local-adapters";
+import { playEarcon } from "@/lib/earcons";
 import {
   buildPronouncerAgentReply,
   classifyPronouncerAgentIntent,
+  maskWordInVisibleText,
 } from "@/lib/pronouncer-agent";
 import type {
   DictionaryCuePayload,
   PronouncerStatusPayload,
+  VoiceTurnResultPayload,
+  VoiceTurnStatusPayload,
 } from "@/lib/provider-client";
 import {
   fetchDictionaryCue,
   fetchPronouncerAudio,
   fetchPronouncerStatus,
+  fetchVoiceTurnStatus,
+  interpretVoiceTurnAudio,
+  interpretVoiceTurnTranscript,
 } from "@/lib/provider-client";
 import {
   applyDrillResult,
@@ -32,6 +40,7 @@ import {
   formatSpellingCandidate,
   normalizeSpokenSpellingAttempt,
 } from "@/lib/spoken-spelling";
+import { judgeSpellingAttempt } from "@/lib/spelling-judge";
 import {
   defaultSettings,
   loadProgress,
@@ -106,7 +115,7 @@ interface FeedEntry {
   content: string;
 }
 
-const goalOptions = [5, 10, 20];
+const goalOptions = [20, 30, 50, 80, 100];
 const roundOptions = [60, 90];
 const suggestedPromptOrder: DrillPromptKind[] = [
   "repeat",
@@ -191,6 +200,28 @@ function getSpeechRecognitionConstructor() {
     null) as BrowserSpeechRecognitionConstructor | null;
 }
 
+function getRecordingMimeType() {
+  if (
+    typeof window === "undefined" ||
+    typeof MediaRecorder === "undefined" ||
+    typeof MediaRecorder.isTypeSupported !== "function"
+  ) {
+    return "";
+  }
+
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/mp4",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+  ];
+
+  return (
+    candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ||
+    ""
+  );
+}
+
 declare global {
   interface Window {
     SpeechRecognition?: BrowserSpeechRecognitionConstructor;
@@ -218,7 +249,6 @@ export function AispbApp() {
     useState<VoiceCaptureMode>(null);
   const [speechTranscript, setSpeechTranscript] = useState("");
   const [speechInterimTranscript, setSpeechInterimTranscript] = useState("");
-  const [, setAgentTranscript] = useState("");
   const [spellingTranscript, setSpellingTranscript] = useState("");
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [status, setStatus] = useState<SubmissionState>("idle");
@@ -228,9 +258,14 @@ export function AispbApp() {
   const [bestStreak, setBestStreak] = useState(0);
   const [sessionCorrectCount, setSessionCorrectCount] = useState(0);
   const [sessionMissCount, setSessionMissCount] = useState(0);
+  const [notebookFilter, setNotebookFilter] = useState<
+    "all" | "due" | "mastered" | "weak"
+  >("all");
   const [browserSpeechReady, setBrowserSpeechReady] = useState(false);
   const [pronouncerStatus, setPronouncerStatus] =
     useState<PronouncerStatusPayload | null>(null);
+  const [voiceTurnStatus, setVoiceTurnStatus] =
+    useState<VoiceTurnStatusPayload | null>(null);
   const [lastPronouncerProvider, setLastPronouncerProvider] = useState<
     string | null
   >(null);
@@ -240,12 +275,18 @@ export function AispbApp() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const speechIdleTimerRef = useRef<number | null>(null);
   const voiceCaptureModeRef = useRef<VoiceCaptureMode>(null);
   const shouldJudgeSpeechOnEndRef = useRef(false);
+  const roundLockedRef = useRef(false);
   const recognitionHadErrorRef = useRef(false);
   const latestSpeechTranscriptRef = useRef("");
   const latestSpeechInterimTranscriptRef = useRef("");
+  const roundIdRef = useRef(0);
+  const suppressRecorderOnStopRef = useRef(false);
   const [feed, setFeed] = useState<FeedEntry[]>([
     {
       id: "feed-initial",
@@ -257,22 +298,36 @@ export function AispbApp() {
   ]);
 
   const todayKey = getTodayKey();
-  const previewPlan = createPreviewPlan(settings, progress);
+  const previewPlan = useMemo(
+    () => createPreviewPlan(settings, progress),
+    [settings, progress],
+  );
   const plan = activePlan ?? previewPlan;
   const sessionWords = plan.words;
   const totalWords = sessionWords.length;
   const currentWord = sessionWords[currentIndex] ?? sessionWords[0];
-  const notebookEntries = getNotebookEntries({
-    words: wordBank,
-    progress,
-    todayKey,
-  });
+  const notebookEntries = useMemo(
+    () =>
+      getNotebookEntries({
+        words: wordBank,
+        progress,
+        todayKey,
+      }),
+    [progress, todayKey],
+  );
   const currentDictionaryCue = currentWord
     ? dictionaryCache[currentWord.id]
     : null;
   const hasExternalPronouncer = pronouncerStatus?.configured ?? false;
   const pronouncerAvailable = hasExternalPronouncer || browserSpeechReady;
-  const speechRecognitionSupported = speechCaptureState !== "unsupported";
+  const cloudVoiceTurnAvailable = voiceTurnStatus?.configured ?? false;
+  const browserRecordingSupported =
+    typeof window !== "undefined" &&
+    typeof MediaRecorder !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia);
+  const speechRecognitionSupported =
+    (cloudVoiceTurnAvailable && browserRecordingSupported) ||
+    Boolean(getSpeechRecognitionConstructor());
   const combinedSpeechTranscript = [speechTranscript, speechInterimTranscript]
     .filter(Boolean)
     .join(" ")
@@ -282,6 +337,14 @@ export function AispbApp() {
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
+  const filteredNotebookEntries = notebookEntries.filter((entry) => {
+    const p = entry.progress;
+    if (notebookFilter === "due")
+      return !p.dueOn || p.dueOn <= todayKey;
+    if (notebookFilter === "mastered") return p.currentStreak >= 4;
+    if (notebookFilter === "weak") return p.wrongCount > p.correctCount;
+    return true;
+  });
   const isVoiceBusy =
     speechCaptureState === "listening" || speechCaptureState === "processing";
   const interactionLocked =
@@ -303,16 +366,20 @@ export function AispbApp() {
     speechCaptureState === "listening"
       ? combinedSpeechTranscript
       : heardTranscript;
-  const voiceStatusLabel = hasExternalPronouncer
-    ? "volc ready"
-    : browserSpeechReady
-      ? "browser fallback"
-      : "voice unavailable";
+  const voiceStatusLabel = cloudVoiceTurnAvailable
+    ? "cloud voice ready"
+    : hasExternalPronouncer
+      ? "browser mic + volc"
+      : browserSpeechReady
+        ? "browser fallback"
+        : "voice unavailable";
   const talkStatusLabel =
     speechCaptureState === "listening"
       ? "listening"
       : speechCaptureState === "processing"
-        ? "routing"
+        ? cloudVoiceTurnAvailable
+          ? "routing through cloud"
+          : "routing"
         : speechCaptureState === "unsupported"
           ? "manual fallback"
           : "ready";
@@ -354,6 +421,14 @@ export function AispbApp() {
     return provider;
   });
   const recentFeed = feed.slice(0, 3);
+  const safeLiveTranscriptDisplay =
+    currentWord && status === "idle"
+      ? maskWordInVisibleText(liveTranscriptDisplay, currentWord)
+      : liveTranscriptDisplay;
+  const safeSpellingTranscript =
+    currentWord && status === "idle"
+      ? maskWordInVisibleText(spellingTranscript, currentWord)
+      : spellingTranscript;
 
   function stopActiveAudio() {
     if (audioRef.current) {
@@ -376,6 +451,13 @@ export function AispbApp() {
       window.clearTimeout(speechIdleTimerRef.current);
       speechIdleTimerRef.current = null;
     }
+  }
+
+  function stopMediaCaptureTracks() {
+    mediaStreamRef.current?.getTracks().forEach((track) => {
+      track.stop();
+    });
+    mediaStreamRef.current = null;
   }
 
   function resetSpeechAttempt(
@@ -404,6 +486,14 @@ export function AispbApp() {
     if (clearManualUtterance) {
       setManualUtteranceValue("");
     }
+  }
+
+  function createRoundSafeContent(content: string) {
+    if (!currentWord) {
+      return content;
+    }
+
+    return maskWordInVisibleText(content, currentWord);
   }
 
   async function playPronouncerText(text: string) {
@@ -450,50 +540,105 @@ export function AispbApp() {
     return null;
   }
 
+  async function playRoundFeedback(
+    kind: "correct" | "incorrect" | "timeout" | "reset",
+  ) {
+    stopActiveAudio();
+    await playEarcon(kind);
+
+    const speechText =
+      kind === "correct"
+        ? "Correct."
+        : kind === "incorrect"
+          ? "That's incorrect."
+          : kind === "timeout"
+            ? "Time."
+            : "Start over.";
+
+    await playPronouncerText(speechText);
+  }
+
   const autoplayCurrentWord = useEffectEvent((nextWord: string) => {
     void playPronouncerText(nextWord);
   });
 
-  async function submitAttempt(
-    rawAttempt: string,
-    options: { allowWholeWordFallback?: boolean } = {},
-  ) {
+  function interpretVoiceTurnLocally(
+    transcript: string,
+  ): VoiceTurnResultPayload {
+    const normalizedAttempt = normalizeSpokenSpellingAttempt(transcript);
+    const intent = classifyPronouncerAgentIntent(transcript);
+
+    if (normalizedAttempt.command === "start-over") {
+      return {
+        confidence: "high",
+        intent: "start-over",
+        normalizedLetters: "",
+        provider: "Local browser router",
+        transcript,
+        usedCloud: false,
+      };
+    }
+
+    if (
+      intent.kind !== "unknown" &&
+      intent.kind !== "disallowed" &&
+      intent.kind !== "ready-to-spell"
+    ) {
+      return {
+        confidence: "medium",
+        intent: intent.kind,
+        normalizedLetters: "",
+        provider: "Local browser router",
+        transcript,
+        usedCloud: false,
+      };
+    }
+
+    if (intent.kind === "disallowed" || intent.kind === "ready-to-spell") {
+      return {
+        confidence: "medium",
+        intent: intent.kind,
+        normalizedLetters: "",
+        provider: "Local browser router",
+        transcript,
+        usedCloud: false,
+      };
+    }
+
+    if (normalizedAttempt.candidate && normalizedAttempt.looksLikeSpelling) {
+      return {
+        confidence: "medium",
+        intent: "spelling",
+        normalizedLetters: normalizedAttempt.candidate,
+        provider: "Local browser router",
+        transcript,
+        usedCloud: false,
+      };
+    }
+
+    return {
+      confidence: "low",
+      intent: "clarify",
+      normalizedLetters: "",
+      provider: "Local browser router",
+      transcript,
+      usedCloud: false,
+    };
+  }
+
+  async function submitSpellingCandidate(candidate: string) {
     if (!currentWord || !sessionStarted || sessionComplete) {
       return;
     }
 
-    const normalizedAttempt = normalizeSpokenSpellingAttempt(rawAttempt, {
-      allowWholeWordFallback: options.allowWholeWordFallback,
-    });
-    const candidate =
-      normalizedAttempt.candidate.trim().toLowerCase() ||
-      rawAttempt.trim().toLowerCase();
+    const normalizedCandidate = candidate.trim().toLowerCase();
 
-    if (normalizedAttempt.command === "start-over") {
-      handleStartOver();
-      return;
-    }
-
-    if (!candidate) {
-      const intent = classifyPronouncerAgentIntent(rawAttempt);
-      const soundedLikePrompt =
-        intent.kind !== "unknown" &&
-        intent.kind !== "disallowed" &&
-        intent.kind !== "ready-to-spell";
-      const nextError = soundedLikePrompt
-        ? "That sounded like a pronouncer request. Ask for definition, sentence, origin, or repeat in the same talk flow."
-        : "No recognizable letters were captured.";
-
-      setSpeechCaptureState(
-        speechRecognitionSupported ? "idle" : "unsupported",
-      );
-      setSpeechError(nextError);
+    if (!normalizedCandidate) {
+      setSpeechError("No recognizable letters were captured.");
       setFeed((previous) => [
         createFeedEntry(
-          soundedLikePrompt ? "Mode guardrail" : "Mic retry",
-          soundedLikePrompt
-            ? "That sounded like a Bee-style prompt request, not a spelling attempt. The app can answer that directly in the same talk flow."
-            : "No recognizable letters were captured. Try again and say each letter distinctly.",
+          "Mic retry",
+          "No recognizable letters were captured. Try again and say each letter distinctly.",
           "danger",
         ),
         ...previous,
@@ -501,9 +646,10 @@ export function AispbApp() {
       return;
     }
 
-    const normalizedWord = currentWord.word.toLowerCase();
+    const judgement = judgeSpellingAttempt(currentWord, normalizedCandidate);
+    roundLockedRef.current = true;
 
-    if (candidate === normalizedWord) {
+    if (judgement.isCorrect) {
       const nextStreak = streak + 1;
 
       setProgress((previous) =>
@@ -521,11 +667,12 @@ export function AispbApp() {
       setFeed((previous) => [
         createFeedEntry(
           "Correct",
-          `${formatSpellingCandidate(candidate)} locked in for ${currentWord.word}. ${currentWord.coachingNote}`,
+          `${formatSpellingCandidate(normalizedCandidate)} locked in cleanly. ${currentWord.coachingNote ?? ""}`,
           "success",
         ),
         ...previous,
       ]);
+      void playRoundFeedback("correct");
 
       window.setTimeout(() => {
         advanceWord();
@@ -533,18 +680,21 @@ export function AispbApp() {
       return;
     }
 
-    await registerMiss("incorrect", candidate);
+    await registerMiss("incorrect", normalizedCandidate);
   }
 
-  async function handleUnifiedUtterance(
-    rawTranscript: string,
-    options: { allowWholeWordFallback?: boolean } = {},
-  ) {
-    const trimmedTranscript = rawTranscript.trim();
+  async function handleVoiceTurnResult(result: VoiceTurnResultPayload) {
+    if (roundLockedRef.current) return;
 
-    setHeardTranscript(trimmedTranscript);
+    const capturedRoundId = roundIdRef.current;
+    const transcript = result.transcript.trim();
 
-    if (!trimmedTranscript) {
+    setHeardTranscript(transcript);
+
+    const roundStillActive = () =>
+      !roundLockedRef.current && roundIdRef.current === capturedRoundId;
+
+    if (!transcript) {
       setSpeechError("No clear speech was captured.");
       setFeed((previous) => [
         createFeedEntry(
@@ -557,29 +707,47 @@ export function AispbApp() {
       return;
     }
 
-    const normalizedAttempt = normalizeSpokenSpellingAttempt(
-      trimmedTranscript,
-      {
-        allowWholeWordFallback: options.allowWholeWordFallback,
-      },
-    );
-
-    if (normalizedAttempt.command === "start-over") {
+    if (result.intent === "start-over") {
       handleStartOver();
       return;
     }
 
-    const intent = classifyPronouncerAgentIntent(trimmedTranscript);
+    if (result.intent === "spelling") {
+      if (!result.normalizedLetters) {
+        setSpeechError("No recognizable letters were captured.");
+        setFeed((previous) => [
+          createFeedEntry(
+            "Mic retry",
+            "The utterance sounded like spelling, but the letters were not clear enough to grade. Please spell again.",
+            "danger",
+          ),
+          ...previous,
+        ]);
+        return;
+      }
 
-    if (intent.kind !== "unknown") {
-      await handlePronouncerDialogue(trimmedTranscript);
+      if (!roundStillActive()) return;
+
+      setSpeechError(null);
+      setSpellingTranscript(transcript);
+      setAttemptDraft(result.normalizedLetters);
+      await submitSpellingCandidate(result.normalizedLetters);
       return;
     }
 
-    if (normalizedAttempt.candidate && normalizedAttempt.looksLikeSpelling) {
-      setSpellingTranscript(trimmedTranscript);
-      setAttemptDraft(normalizedAttempt.candidate);
-      await submitAttempt(trimmedTranscript, options);
+    if (
+      result.intent === "repeat" ||
+      result.intent === "definition" ||
+      result.intent === "sentence" ||
+      result.intent === "origin" ||
+      result.intent === "part-of-speech" ||
+      result.intent === "all-info" ||
+      result.intent === "ready-to-spell" ||
+      result.intent === "disallowed"
+    ) {
+      if (!roundStillActive()) return;
+
+      await handlePronouncerDialogue(transcript, result.intent);
       return;
     }
 
@@ -596,11 +764,141 @@ export function AispbApp() {
     ]);
   }
 
-  function startSpeechCapture(mode: VoiceCaptureMode) {
-    if (!sessionStarted || sessionComplete || status !== "idle") {
+  async function handleUnifiedUtterance(rawTranscript: string) {
+    const trimmedTranscript = rawTranscript.trim();
+
+    if (!trimmedTranscript) {
+      setHeardTranscript("");
+      setSpeechError("No clear speech was captured.");
       return;
     }
 
+    try {
+      const result = await interpretVoiceTurnTranscript(trimmedTranscript);
+
+      await handleVoiceTurnResult(result);
+      return;
+    } catch (error) {
+      console.error("voice turn transcript fallback", error);
+    }
+
+    await handleVoiceTurnResult(interpretVoiceTurnLocally(trimmedTranscript));
+  }
+
+  async function handleCapturedAudio(audio: Blob) {
+    try {
+      const result = await interpretVoiceTurnAudio(audio);
+
+      await handleVoiceTurnResult(result);
+      return;
+    } catch (error) {
+      console.error("voice turn audio route", error);
+      setSpeechError(
+        "Cloud voice routing could not process that recording. Try again or use the text fallback below.",
+      );
+      setFeed((previous) => [
+        createFeedEntry(
+          "Voice retry",
+          "The cloud voice route could not process that recording, so the round stayed open.",
+          "danger",
+        ),
+        ...previous,
+      ]);
+    }
+  }
+
+  async function startCloudSpeechCapture(mode: VoiceCaptureMode) {
+    if (!browserRecordingSupported) {
+      setSpeechCaptureState("error");
+      setSpeechError(
+        "This browser cannot stream microphone audio to the server yet. Use the text fallback for now.",
+      );
+      return;
+    }
+
+    stopActiveAudio();
+    resetSpeechAttempt({
+      clearAttemptDraft: true,
+      clearManualUtterance: false,
+    });
+    voiceCaptureModeRef.current = mode;
+    setVoiceCaptureMode(mode);
+    setSpeechCaptureState("processing");
+    setSpeechError(null);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      const recordingMimeType = getRecordingMimeType();
+      const recorder = recordingMimeType
+        ? new MediaRecorder(stream, { mimeType: recordingMimeType })
+        : new MediaRecorder(stream);
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      mediaChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          mediaChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        stopMediaCaptureTracks();
+        mediaRecorderRef.current = null;
+        setSpeechCaptureState("error");
+        setSpeechError("Microphone capture failed.");
+      };
+      recorder.onstop = () => {
+        if (suppressRecorderOnStopRef.current) {
+          suppressRecorderOnStopRef.current = false;
+          stopMediaCaptureTracks();
+          mediaRecorderRef.current = null;
+          mediaChunksRef.current = [];
+          return;
+        }
+
+        const mimeType = recorder.mimeType || recordingMimeType || "audio/webm";
+        const audio = new Blob(mediaChunksRef.current, {
+          type: mimeType,
+        });
+
+        stopMediaCaptureTracks();
+        mediaRecorderRef.current = null;
+        mediaChunksRef.current = [];
+
+        if (!audio.size) {
+          setSpeechCaptureState("error");
+          setSpeechError("No microphone audio was captured.");
+          return;
+        }
+
+        setSpeechCaptureState("processing");
+        void handleCapturedAudio(audio).finally(() => {
+          voiceCaptureModeRef.current = null;
+          setVoiceCaptureMode(null);
+          setSpeechCaptureState("idle");
+        });
+      };
+
+      recorder.start();
+      setSpeechCaptureState("listening");
+    } catch (error) {
+      console.error("cloud speech capture start", error);
+      stopMediaCaptureTracks();
+      mediaRecorderRef.current = null;
+      setSpeechCaptureState("error");
+      setSpeechError("Microphone access was blocked or failed to start.");
+    }
+  }
+
+  function startBrowserSpeechCapture(mode: VoiceCaptureMode) {
     const Recognition = getSpeechRecognitionConstructor();
 
     if (!Recognition) {
@@ -625,6 +923,8 @@ export function AispbApp() {
         setSpeechError(null);
       };
       nextRecognition.onresult = (event) => {
+        if (roundLockedRef.current) return;
+
         const finalChunks: string[] = [];
         const interimChunks: string[] = [];
 
@@ -727,6 +1027,7 @@ export function AispbApp() {
       recognitionRef.current = nextRecognition;
     }
 
+    stopActiveAudio();
     resetSpeechAttempt({
       clearAttemptDraft: true,
       clearManualUtterance: false,
@@ -743,7 +1044,26 @@ export function AispbApp() {
     }
   }
 
+  function startSpeechCapture(mode: VoiceCaptureMode) {
+    if (!sessionStarted || sessionComplete || status !== "idle") {
+      return;
+    }
+
+    if (cloudVoiceTurnAvailable && browserRecordingSupported) {
+      void startCloudSpeechCapture(mode);
+      return;
+    }
+
+    startBrowserSpeechCapture(mode);
+  }
+
   function stopSpeechCaptureAndHandle() {
+    if (mediaRecorderRef.current?.state === "recording") {
+      setSpeechCaptureState("processing");
+      mediaRecorderRef.current.stop();
+      return;
+    }
+
     if (!recognitionRef.current || speechCaptureState !== "listening") {
       return;
     }
@@ -771,15 +1091,16 @@ export function AispbApp() {
     const timeoutId = window.setTimeout(() => {
       const nextSettings = loadSettings();
       const nextProgress = loadProgress();
+      const canRecordAudio =
+        typeof window !== "undefined" &&
+        typeof MediaRecorder !== "undefined" &&
+        Boolean(navigator.mediaDevices?.getUserMedia);
 
       setSettings(nextSettings);
       setProgress(nextProgress);
       setSecondsLeft(nextSettings.roundDurationSeconds);
       setBrowserSpeechReady(
         typeof window !== "undefined" && "speechSynthesis" in window,
-      );
-      setSpeechCaptureState(
-        getSpeechRecognitionConstructor() ? "idle" : "unsupported",
       );
       setStorageReady(true);
       void fetchPronouncerStatus()
@@ -789,12 +1110,33 @@ export function AispbApp() {
         .catch((error) => {
           console.error("pronouncer status fallback", error);
         });
+      void fetchVoiceTurnStatus()
+        .then((nextStatus) => {
+          setVoiceTurnStatus(nextStatus);
+          setSpeechCaptureState(
+            (nextStatus.configured && canRecordAudio) ||
+              getSpeechRecognitionConstructor()
+              ? "idle"
+              : "unsupported",
+          );
+        })
+        .catch((error) => {
+          console.error("voice turn status fallback", error);
+          setSpeechCaptureState(
+            getSpeechRecognitionConstructor() ? "idle" : "unsupported",
+          );
+        });
     }, 0);
 
     return () => {
       window.clearTimeout(timeoutId);
       stopActiveAudio();
       clearSpeechIdleTimer();
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      mediaRecorderRef.current = null;
+      stopMediaCaptureTracks();
       recognitionRef.current?.abort();
       recognitionRef.current = null;
 
@@ -882,6 +1224,9 @@ export function AispbApp() {
   }
 
   function beginSession() {
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+
     const nextPlan = createPreviewPlan(settings, progress);
 
     setActivePlan(nextPlan);
@@ -891,12 +1236,12 @@ export function AispbApp() {
     setSecondsLeft(nextPlan.settings.roundDurationSeconds);
     resetSpeechAttempt();
     setHeardTranscript("");
-    setAgentTranscript("");
     setSpellingTranscript("");
     setStatus("idle");
     setHintsUsed([]);
     setRestartCount(0);
     setStreak(0);
+    setBestStreak(0);
     setSessionCorrectCount(0);
     setSessionMissCount(0);
     setLastPronouncerProvider(null);
@@ -911,6 +1256,9 @@ export function AispbApp() {
 
   function advanceWord() {
     startTransition(() => {
+      roundLockedRef.current = false;
+      roundIdRef.current += 1;
+
       if (!activePlan) {
         return;
       }
@@ -937,7 +1285,6 @@ export function AispbApp() {
       setSecondsLeft(activePlan.settings.roundDurationSeconds);
       resetSpeechAttempt();
       setHeardTranscript("");
-      setAgentTranscript("");
       setSpellingTranscript("");
       setStatus("idle");
       setHintsUsed([]);
@@ -961,7 +1308,13 @@ export function AispbApp() {
       return;
     }
 
+    roundLockedRef.current = true;
     shouldJudgeSpeechOnEndRef.current = false;
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    stopMediaCaptureTracks();
     recognitionRef.current?.abort();
     setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
 
@@ -990,6 +1343,7 @@ export function AispbApp() {
       ),
       ...previous,
     ]);
+    void playRoundFeedback(result === "timeout" ? "timeout" : "incorrect");
 
     window.setTimeout(() => {
       advanceWord();
@@ -1062,7 +1416,7 @@ export function AispbApp() {
         pronouncerProvider
           ? `${reply.label} · ${pronouncerProvider}`
           : reply.label,
-        reply.displayText,
+        createRoundSafeContent(reply.displayText),
         reply.tone,
       ),
       ...previous,
@@ -1071,7 +1425,6 @@ export function AispbApp() {
 
   async function requestPronouncerPrompt(kind: DrillPromptKind) {
     setHeardTranscript(promptLabels[kind]);
-    setAgentTranscript(promptLabels[kind]);
     setFeed((previous) => [
       createFeedEntry("You asked", promptLabels[kind], "system"),
       ...previous,
@@ -1079,7 +1432,10 @@ export function AispbApp() {
     await deliverPronouncerIntent(kind);
   }
 
-  async function handlePronouncerDialogue(rawTranscript: string) {
+  async function handlePronouncerDialogue(
+    rawTranscript: string,
+    forcedIntent?: ReturnType<typeof classifyPronouncerAgentIntent>["kind"],
+  ) {
     if (!currentWord || !sessionStarted || sessionComplete) {
       return;
     }
@@ -1100,15 +1456,15 @@ export function AispbApp() {
     }
 
     setHeardTranscript(trimmedTranscript);
-    setAgentTranscript(trimmedTranscript);
-    const intent = classifyPronouncerAgentIntent(trimmedTranscript);
+    const intentKind =
+      forcedIntent ?? classifyPronouncerAgentIntent(trimmedTranscript).kind;
 
     setFeed((previous) => [
-      createFeedEntry("You asked", trimmedTranscript, "system"),
+      createFeedEntry("You asked", createRoundSafeContent(trimmedTranscript), "system"),
       ...previous,
     ]);
 
-    await deliverPronouncerIntent(intent.kind);
+    await deliverPronouncerIntent(intentKind);
   }
 
   function handleStartOver() {
@@ -1117,12 +1473,19 @@ export function AispbApp() {
     }
 
     shouldJudgeSpeechOnEndRef.current = false;
+    suppressRecorderOnStopRef.current = true;
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    stopMediaCaptureTracks();
     recognitionRef.current?.abort();
     setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
     setRestartCount((previous) => previous + 1);
     resetSpeechAttempt();
     setHeardTranscript("");
     setSpellingTranscript("");
+    void playRoundFeedback("reset");
     setFeed((previous) => [
       createFeedEntry(
         "Start over",
@@ -1134,10 +1497,12 @@ export function AispbApp() {
   }
 
   function renderNotebookEntry(entry: NotebookEntry) {
+    const p = entry.progress;
+    const acc = p.seenCount > 0 ? Math.round((p.correctCount / p.seenCount) * 100) : 0;
     const dueLabel =
-      !entry.progress.dueOn || entry.progress.dueOn <= todayKey
+      !p.dueOn || p.dueOn <= todayKey
         ? "due now"
-        : `due ${entry.progress.dueOn}`;
+        : `due ${p.dueOn}`;
 
     return (
       <article
@@ -1148,19 +1513,18 @@ export function AispbApp() {
           <p className="font-[family:var(--font-display)] text-2xl text-[color:var(--foreground)]">
             {entry.word.word}
           </p>
-          <span className="rounded-full bg-[color:var(--signal)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--signal)]">
-            {dueLabel}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-[color:var(--accent-soft)]/60 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+              {acc}%
+            </span>
+            <span className="rounded-full bg-[color:var(--signal)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--signal)]">
+              {dueLabel}
+            </span>
+          </div>
         </div>
-        <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-          {entry.word.coachingNote}
-        </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <span className="badge">misses {entry.progress.wrongCount}</span>
-          <span className="badge">
-            review load {entry.progress.reviewCount}
-          </span>
-          <span className="badge">streak {entry.progress.currentStreak}</span>
+          <span className="badge">{p.correctCount}/{p.seenCount} correct</span>
+          <span className="badge">streak {p.currentStreak}</span>
         </div>
       </article>
     );
@@ -1202,7 +1566,7 @@ export function AispbApp() {
                   {lastPronouncerProvider ?? "ready"}
                 </span>
                 <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                  {currentWord.category}
+                  {currentWord.category ?? ""}
                 </span>
               </div>
             </div>
@@ -1210,7 +1574,7 @@ export function AispbApp() {
               Word {String(currentIndex + 1).padStart(2, "0")}
             </p>
             <p className="mt-4 max-w-lg text-sm leading-6 text-white/70">
-              {currentWord.pronunciationNote}
+              {currentWord.pronunciationNote ?? ""}
             </p>
           </div>
 
@@ -1274,7 +1638,7 @@ export function AispbApp() {
                   I heard
                 </p>
                 <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
-                  {liveTranscriptDisplay ||
+                  {safeLiveTranscriptDisplay ||
                     "Ask for definition, sentence, origin, repeat, or start spelling letters aloud."}
                 </p>
                 <p className="mt-2 text-xs leading-5 text-[color:var(--muted)]">
@@ -1292,7 +1656,7 @@ export function AispbApp() {
                   </span>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
-                  {spellingTranscript ||
+                  {safeSpellingTranscript ||
                     "If you spell letters aloud, they will lock below automatically."}
                 </p>
                 <p className="mt-3 font-[family:var(--font-display)] text-2xl leading-8 text-[color:var(--foreground)] sm:text-3xl">
@@ -1319,7 +1683,7 @@ export function AispbApp() {
                   </span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                  {currentWord.coachingNote}
+                  {currentWord.coachingNote ?? ""}
                 </p>
               </div>
             ) : null}
@@ -1355,9 +1719,7 @@ export function AispbApp() {
                     !manualUtteranceValue.trim()
                   }
                   onClick={() => {
-                    void handleUnifiedUtterance(manualUtteranceValue, {
-                      allowWholeWordFallback: true,
-                    }).finally(() => {
+                    void handleUnifiedUtterance(manualUtteranceValue).finally(() => {
                       setManualUtteranceValue("");
                     });
                   }}
@@ -1675,7 +2037,7 @@ export function AispbApp() {
                 <div>
                   <p className="eyebrow">Notebook</p>
                   <h3 className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">
-                    Persistent review queue
+                    Practice review
                   </h3>
                 </div>
                 <span className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
@@ -1683,14 +2045,41 @@ export function AispbApp() {
                 </span>
               </div>
 
+              <div className="mt-4 flex gap-2 overflow-x-auto">
+                {(["all", "due", "weak", "mastered"] as const).map((tab) => {
+                  const isActive = notebookFilter === tab;
+                  const labels: Record<string, string> = {
+                    all: `All (${notebookEntries.length})`,
+                    due: `Due (${dueNotebookCount})`,
+                    weak: `Weak (${notebookEntries.filter((e) => e.progress.wrongCount > e.progress.correctCount).length})`,
+                    mastered: `Mastered (${notebookEntries.filter((e) => e.progress.currentStreak >= 4).length})`,
+                  };
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setNotebookFilter(tab)}
+                      className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        isActive
+                          ? "bg-[color:var(--accent)] text-white"
+                          : "bg-[color:var(--accent-soft)]/40 text-[color:var(--muted)] hover:bg-[color:var(--accent-soft)]/70"
+                      }`}
+                    >
+                      {labels[tab]}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="mt-4 space-y-3">
-                {notebookEntries.length === 0 ? (
+                {filteredNotebookEntries.length === 0 ? (
                   <div className="rounded-[22px] border border-dashed border-[color:var(--line)] bg-white/45 p-4 text-sm leading-6 text-[color:var(--muted)]">
-                    No notebook words yet. Misses and timeouts persist locally
-                    and return in future daily plans.
+                    {notebookEntries.length === 0
+                      ? "No notebook words yet. Words you practise will appear here with accuracy stats."
+                      : "No words match this filter."}
                   </div>
                 ) : (
-                  notebookEntries.slice(0, 5).map(renderNotebookEntry)
+                  filteredNotebookEntries.slice(0, 10).map(renderNotebookEntry)
                 )}
               </div>
             </div>

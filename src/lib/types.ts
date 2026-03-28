@@ -13,15 +13,15 @@ export type PlanReason = "review" | "fresh";
 export interface DrillWord {
   id: string;
   word: string;
-  phonetic: string;
-  category: string;
   difficulty: number;
-  pronunciationNote: string;
-  definition: string;
-  sentence: string;
-  origin: string;
-  coachingNote: string;
   source: string;
+  phonetic?: string;
+  category?: string;
+  pronunciationNote?: string;
+  definition?: string;
+  sentence?: string;
+  origin?: string;
+  coachingNote?: string;
 }
 
 export interface DrillSettings {

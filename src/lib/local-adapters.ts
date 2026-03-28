@@ -14,7 +14,7 @@ export const localPronouncerAdapter: TtsProviderAdapter = {
       return word.word;
     }
 
-    return `${word.word}. ${word.pronunciationNote}`;
+    return `${word.word}${word.pronunciationNote ? `. ${word.pronunciationNote}` : ""}`;
   },
 };
 
@@ -22,13 +22,13 @@ export const localDictionaryAdapter: DictionaryProviderAdapter = {
   id: "seed-dictionary",
   label: "Seed Dictionary",
   async getDefinition(word) {
-    return word.definition;
+    return word.definition ?? "Definition not available.";
   },
   async getOrigin(word) {
-    return word.origin;
+    return word.origin ?? "Origin not available.";
   },
   async getSentence(word) {
-    return word.sentence;
+    return word.sentence ?? "Example sentence not available.";
   },
 };
 
@@ -41,7 +41,7 @@ export const localCoachAdapter: CoachProviderAdapter = {
         ? "Time ran out before the spelling locked in."
         : `Your attempt was "${attempt || "blank"}".`;
 
-    return `${reason} ${word.coachingNote}`;
+    return `${reason} ${word.coachingNote ?? "Review the correct spelling carefully."}`;
   },
 };
 
@@ -83,15 +83,15 @@ export function getPromptPreview(
     | "all-info",
 ) {
   if (promptKind === "repeat") {
-    return `Pronouncer repeats the word. ${word.pronunciationNote}`;
+    return `Pronouncer repeats the word.${word.pronunciationNote ? ` ${word.pronunciationNote}` : ""}`;
   }
 
   if (promptKind === "definition") {
-    return word.definition;
+    return word.definition ?? "Definition not available.";
   }
 
   if (promptKind === "sentence") {
-    return word.sentence;
+    return word.sentence ?? "Example sentence not available.";
   }
 
   if (promptKind === "part-of-speech") {
@@ -99,8 +99,8 @@ export function getPromptPreview(
   }
 
   if (promptKind === "all-info") {
-    return `${word.definition} ${word.origin}`;
+    return [word.definition, word.origin].filter(Boolean).join(" ") || "Details not available.";
   }
 
-  return word.origin;
+  return word.origin ?? "Origin not available.";
 }
