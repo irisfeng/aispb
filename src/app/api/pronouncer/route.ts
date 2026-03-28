@@ -9,6 +9,9 @@ import {
 
 export const runtime = "nodejs";
 
+const MAX_TEXT_LENGTH = 500;
+const MAX_CONTENT_LENGTH = 10 * 1024; // 10 KB
+
 interface PronouncerRequestBody {
   text?: string;
 }
@@ -18,6 +21,14 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && Number(contentLength) > MAX_CONTENT_LENGTH) {
+    return NextResponse.json(
+      { error: "Request body too large." },
+      { status: 413 },
+    );
+  }
+
   let body: PronouncerRequestBody;
 
   try {
@@ -29,11 +40,25 @@ export async function POST(request: Request) {
     );
   }
 
+  if (body.text !== undefined && typeof body.text !== "string") {
+    return NextResponse.json(
+      { error: "Field 'text' must be a string." },
+      { status: 400 },
+    );
+  }
+
   const text = body.text?.trim();
 
   if (!text) {
     return NextResponse.json(
       { error: "Missing text for pronouncer synthesis." },
+      { status: 400 },
+    );
+  }
+
+  if (text.length > MAX_TEXT_LENGTH) {
+    return NextResponse.json(
+      { error: `Text exceeds maximum length of ${MAX_TEXT_LENGTH} characters.` },
       { status: 400 },
     );
   }

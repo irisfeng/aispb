@@ -23,11 +23,11 @@ function hashSeed(value: string) {
 
 function rankFreshWords(words: DrillWord[], seed: string) {
   return [...words].sort((left, right) => {
-    const leftHash = hashSeed(`${seed}:${left.id}`);
-    const rightHash = hashSeed(`${seed}:${right.id}`);
+    const leftHash = hashSeed(`${seed}:${left.id}`) * (left.difficulty >= 2 ? 0.6 : 1);
+    const rightHash = hashSeed(`${seed}:${right.id}`) * (right.difficulty >= 2 ? 0.6 : 1);
 
     if (leftHash === rightHash) {
-      return left.difficulty - right.difficulty;
+      return right.difficulty - left.difficulty;
     }
 
     return leftHash - rightHash;
@@ -99,11 +99,19 @@ export function createDrillPlan(input: {
 
   const dueIds = new Set(dueWords.map((word) => word.id));
   const freshWords = rankFreshWords(
-    words.filter((word) => !dueIds.has(word.id)),
+    words.filter((word) => {
+      if (dueIds.has(word.id)) return false;
+      const record = progress[word.id];
+      if (!record) return true;
+      if (record.dueOn && record.dueOn > todayKey) return false;
+      return true;
+    }),
     `${todayKey}:${settings.dailyGoal}:${settings.roundDurationSeconds}`,
   );
 
-  const selectedReview = dueWords.slice(0, settings.dailyGoal);
+  const minFreshQuota = 5;
+  const maxReview = Math.max(settings.dailyGoal - minFreshQuota, 0);
+  const selectedReview = dueWords.slice(0, maxReview);
   const remainingSlots = Math.max(settings.dailyGoal - selectedReview.length, 0);
   const selectedFresh = freshWords.slice(0, remainingSlots);
   const plannedWords: PlannedDrillWord[] = [
@@ -154,12 +162,12 @@ export function applyDrillResult(input: {
     next.correctCount = current.correctCount + 1;
     next.currentStreak = nextStreak;
     next.reviewCount = nextReviewCount;
-    next.dueOn = nextReviewCount > 0 ? addDays(todayKey, 1) : addDays(todayKey, nextStreak >= 4 ? 7 : 3);
+    next.dueOn = nextReviewCount > 0 ? addDays(todayKey, 1) : addDays(todayKey, nextStreak >= 4 ? 7 : nextStreak >= 2 ? 5 : 2);
   } else {
     next.wrongCount = current.wrongCount + 1;
     next.currentStreak = 0;
     next.reviewCount = Math.min(current.reviewCount + 1, 3);
-    next.dueOn = todayKey;
+    next.dueOn = addDays(todayKey, 1);
   }
 
   return {
@@ -179,7 +187,7 @@ export function getNotebookEntries(input: {
     .map((word) => {
       const record = progress[word.id];
 
-      if (!record || record.reviewCount <= 0) {
+      if (!record || record.seenCount <= 0) {
         return null;
       }
 
@@ -190,17 +198,16 @@ export function getNotebookEntries(input: {
     })
     .filter((entry): entry is NotebookEntry => entry !== null)
     .sort((left, right) => {
+      const leftAcc = left.progress.seenCount > 0 ? left.progress.correctCount / left.progress.seenCount : 0;
+      const rightAcc = right.progress.seenCount > 0 ? right.progress.correctCount / right.progress.seenCount : 0;
+
+      if (leftAcc !== rightAcc) {
+        return leftAcc - rightAcc;
+      }
+
       const leftDueNow = !left.progress.dueOn || left.progress.dueOn <= todayKey ? 1 : 0;
       const rightDueNow = !right.progress.dueOn || right.progress.dueOn <= todayKey ? 1 : 0;
 
-      if (leftDueNow !== rightDueNow) {
-        return rightDueNow - leftDueNow;
-      }
-
-      if (left.progress.reviewCount !== right.progress.reviewCount) {
-        return right.progress.reviewCount - left.progress.reviewCount;
-      }
-
-      return right.progress.wrongCount - left.progress.wrongCount;
+      return rightDueNow - leftDueNow;
     });
 }

@@ -4,7 +4,7 @@ const SETTINGS_KEY = "aispb:settings:v1";
 const PROGRESS_KEY = "aispb:progress:v1";
 
 export const defaultSettings: DrillSettings = {
-  dailyGoal: 20,
+  dailyGoal: 50,
   roundDurationSeconds: 60,
   pronouncerEnabled: true,
 };
@@ -31,12 +31,70 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-export function loadSettings() {
-  return readJson<DrillSettings>(SETTINGS_KEY, defaultSettings);
+// ---------------------------------------------------------------------------
+// Runtime validation guards — prevent malformed localStorage from poisoning
+// timer math, planning, or spaced-repetition calculations.
+// ---------------------------------------------------------------------------
+
+const VALID_DAILY_GOALS = new Set([20, 30, 50, 80, 100]);
+const VALID_ROUND_DURATIONS = new Set([60, 90]);
+
+function isValidDrillSettings(value: unknown): value is DrillSettings {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const obj = value as Record<string, unknown>;
+
+  return (
+    typeof obj.dailyGoal === "number" &&
+    VALID_DAILY_GOALS.has(obj.dailyGoal) &&
+    typeof obj.roundDurationSeconds === "number" &&
+    VALID_ROUND_DURATIONS.has(obj.roundDurationSeconds) &&
+    typeof obj.pronouncerEnabled === "boolean"
+  );
 }
 
-export function loadProgress() {
-  return readJson<ProgressMap>(PROGRESS_KEY, {});
+const PROGRESS_NUMBER_FIELDS = [
+  "seenCount",
+  "correctCount",
+  "wrongCount",
+  "currentStreak",
+  "reviewCount",
+] as const;
+
+function isValidProgressMap(value: unknown): value is ProgressMap {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const obj = value as Record<string, unknown>;
+
+  for (const entry of Object.values(obj)) {
+    if (typeof entry !== "object" || entry === null) {
+      return false;
+    }
+
+    const record = entry as Record<string, unknown>;
+
+    for (const field of PROGRESS_NUMBER_FIELDS) {
+      if (typeof record[field] !== "number") {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export function loadSettings(): DrillSettings {
+  const raw = readJson<unknown>(SETTINGS_KEY, defaultSettings);
+  return isValidDrillSettings(raw) ? raw : defaultSettings;
+}
+
+export function loadProgress(): ProgressMap {
+  const raw = readJson<unknown>(PROGRESS_KEY, {});
+  return isValidProgressMap(raw) ? raw : {};
 }
 
 export function saveSettings(settings: DrillSettings) {
