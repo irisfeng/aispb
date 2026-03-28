@@ -2,23 +2,38 @@
  * iFlytek (科大讯飞) Streaming Speech Dictation (语音听写流式版)
  *
  * WebSocket API that transcribes audio in real-time.
- * Docs: https://www.xfyun.cn/doc/asr/voicedictation/API.html
+ *
+ * Supports both domestic and global endpoints:
+ *   - Domestic: iat-api.xfyun.cn (China)
+ *   - Global:   iat-api-sg.xf-yun.com (Singapore, <100ms to Tokyo)
+ *
+ * Docs:
+ *   - Domestic: https://www.xfyun.cn/doc/asr/voicedictation/API.html
+ *   - Global:   https://global.xfyun.cn/doc/asr/voicedictation/API.html
  *
  * Env vars:
  *   IFLYTEK_APP_ID       — Application ID
  *   IFLYTEK_API_KEY      — API Key
  *   IFLYTEK_API_SECRET   — API Secret
+ *   IFLYTEK_REGION       — "global" for Singapore endpoint (optional, default domestic)
  */
 
 import { createHmac } from "node:crypto";
 import WebSocket from "ws";
 
-const WS_HOST = "iat-api.xfyun.cn";
+/** Domestic (China) endpoint */
+const WS_HOST_DOMESTIC = "iat-api.xfyun.cn";
+/** Global (Singapore) endpoint — lower latency from Tokyo */
+const WS_HOST_GLOBAL = "iat-api-sg.xf-yun.com";
 const WS_PATH = "/v2/iat";
 
-// PCM 16kHz mono, 40ms per frame = 1280 bytes
+function getWsHost(): string {
+  const region = process.env.IFLYTEK_REGION?.trim().toLowerCase();
+  return region === "global" ? WS_HOST_GLOBAL : WS_HOST_DOMESTIC;
+}
+
+// PCM 16kHz mono, 1280 bytes per logical frame
 const FRAME_SIZE = 1280;
-const FRAME_INTERVAL_MS = 40;
 
 export function hasIflytekAsrConfig(): boolean {
   return Boolean(
@@ -42,8 +57,9 @@ function getApiSecret() {
  * Build the authenticated WebSocket URL with HMAC-SHA256 signature.
  */
 function buildAuthUrl(): string {
+  const wsHost = getWsHost();
   const date = new Date().toUTCString();
-  const signatureOrigin = `host: ${WS_HOST}\ndate: ${date}\nGET ${WS_PATH} HTTP/1.1`;
+  const signatureOrigin = `host: ${wsHost}\ndate: ${date}\nGET ${WS_PATH} HTTP/1.1`;
 
   const signature = createHmac("sha256", getApiSecret())
     .update(signatureOrigin)
@@ -61,10 +77,10 @@ function buildAuthUrl(): string {
   const params = new URLSearchParams({
     authorization,
     date,
-    host: WS_HOST,
+    host: wsHost,
   });
 
-  return `wss://${WS_HOST}${WS_PATH}?${params.toString()}`;
+  return `wss://${wsHost}${WS_PATH}?${params.toString()}`;
 }
 
 // ---- Response parsing -------------------------------------------------------
@@ -150,15 +166,13 @@ export async function transcribeWithIflytek(
     });
 
     ws.on("open", () => {
-      // Stream audio frames
+      // Send all audio frames as fast as possible (no 40ms delay).
+      // The audio is pre-recorded, so real-time pacing is unnecessary.
+      // iFlytek's server buffers incoming frames regardless of timing.
       let offset = 0;
       let frameIndex = 0;
 
-      function sendNextFrame() {
-        if (ws.readyState !== ws.OPEN) {
-          return;
-        }
-
+      while (offset < pcmBuffer.length) {
         const isFirst = frameIndex === 0;
         const remaining = pcmBuffer.length - offset;
         const chunkSize = Math.min(FRAME_SIZE, remaining);
@@ -190,13 +204,7 @@ export async function transcribeWithIflytek(
         ws.send(JSON.stringify(frame));
         offset += chunkSize;
         frameIndex += 1;
-
-        if (!isLast) {
-          setTimeout(sendNextFrame, FRAME_INTERVAL_MS);
-        }
       }
-
-      sendNextFrame();
     });
 
     ws.on("message", (data: Buffer | string) => {
