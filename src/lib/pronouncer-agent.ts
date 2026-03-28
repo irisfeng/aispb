@@ -182,35 +182,30 @@ export function maskWordInVisibleText(text: string, word: DrillWord) {
 
 function buildAllInfoCopy(word: DrillWord, cue: DictionaryCuePayload | null) {
   const definition = cue?.definition ?? word.definition ?? "";
-  const partOfSpeech = cue?.partOfSpeech
-    ? `Part of speech: ${cue.partOfSpeech}.`
-    : "";
+  const partOfSpeech = cue?.partOfSpeech ?? "";
   const sentence = cue?.sentence ?? word.sentence ?? "";
   const origin = cue?.origin ?? word.origin ?? "";
-  const maskedDefinition = maskWordInVisibleText(definition, word);
-  const maskedSentence = maskWordInVisibleText(sentence, word);
-  const maskedOrigin = maskWordInVisibleText(origin, word);
+
+  const segments: string[] = [];
+
+  if (definition) {
+    segments.push(`The definition is: ${maskWordInVisibleText(definition, word)}`);
+  }
+  if (partOfSpeech) {
+    segments.push(`It's a ${partOfSpeech}.`);
+  }
+  if (sentence) {
+    segments.push(`Here is a sentence: ${maskWordInVisibleText(sentence, word)}`);
+  }
+  if (origin) {
+    segments.push(`The origin is ${maskWordInVisibleText(origin, word)}`);
+  }
+
+  const combined = segments.join(" ");
 
   return {
-    displayText: [
-      "Definition:",
-      maskedDefinition,
-      partOfSpeech,
-      "Sentence:",
-      maskedSentence,
-      "Origin:",
-      maskedOrigin,
-    ]
-      .filter(Boolean)
-      .join(" "),
-    speechText: [
-      maskedDefinition,
-      partOfSpeech,
-      maskedSentence,
-      maskedOrigin,
-    ]
-      .filter(Boolean)
-      .join(" "),
+    displayText: combined || "No additional information is available.",
+    speechText: combined || "No additional information is available.",
   };
 }
 
@@ -229,53 +224,110 @@ export function buildPronouncerAgentReply(args: {
     case "repeat":
       return {
         label: "Pronouncer",
-        displayText: "The pronouncer repeated the word aloud.",
+        displayText: "The word has been repeated.",
         speechText: word.word,
         promptKind: "repeat",
         tone: "system",
       };
     case "definition": {
-      const definitionRaw = cue?.definition ?? word.definition ?? "Definition not available.";
+      const definitionRaw = cue?.definition ?? word.definition;
+      if (!definitionRaw) {
+        return {
+          label: "Pronouncer",
+          displayText: "Definition is not available for this word.",
+          speechText: "Definition is not available for this word.",
+          promptKind: "definition",
+          tone: "hint",
+        };
+      }
+      const prefix = pickVariant([
+        "The definition is:",
+        "It means:",
+        "The definition:",
+      ]);
+      const full = `${prefix} ${definitionRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(definitionRaw, word),
-        speechText: maskWordInVisibleText(definitionRaw, word),
+        displayText: maskWordInVisibleText(full, word),
+        speechText: maskWordInVisibleText(full, word),
         promptKind: "definition",
         tone: "hint",
       };
     }
     case "sentence": {
-      const sentenceRaw = cue?.sentence ?? word.sentence ?? "Example sentence not available.";
+      const sentenceRaw = cue?.sentence ?? word.sentence;
+      if (!sentenceRaw) {
+        return {
+          label: "Pronouncer",
+          displayText: "A sentence is not available for this word.",
+          speechText: "A sentence is not available for this word.",
+          promptKind: "sentence",
+          tone: "hint",
+        };
+      }
+      const prefix = pickVariant([
+        "Here is a sentence:",
+        "Used in a sentence:",
+        "A sentence:",
+      ]);
+      const full = `${prefix} ${sentenceRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(sentenceRaw, word),
-        speechText: maskWordInVisibleText(sentenceRaw, word),
+        displayText: maskWordInVisibleText(full, word),
+        speechText: maskWordInVisibleText(full, word),
         promptKind: "sentence",
         tone: "hint",
       };
     }
     case "origin": {
-      const originRaw = cue?.origin ?? word.origin ?? "Origin not available.";
+      const originRaw = cue?.origin ?? word.origin;
+      if (!originRaw) {
+        return {
+          label: "Pronouncer",
+          displayText: "Origin is not available for this word.",
+          speechText: "Origin is not available for this word.",
+          promptKind: "origin",
+          tone: "hint",
+        };
+      }
+      const prefix = pickVariant([
+        "The origin is",
+        "It comes from",
+        "The language of origin:",
+      ]);
+      const full = `${prefix} ${originRaw}`;
       return {
         label: "Pronouncer",
-        displayText: maskWordInVisibleText(originRaw, word),
-        speechText: maskWordInVisibleText(originRaw, word),
+        displayText: maskWordInVisibleText(full, word),
+        speechText: maskWordInVisibleText(full, word),
         promptKind: "origin",
         tone: "hint",
       };
     }
-    case "part-of-speech":
+    case "part-of-speech": {
+      if (!cue?.partOfSpeech) {
+        return {
+          label: "Pronouncer",
+          displayText: "Part of speech is not available.",
+          speechText: "Part of speech is not available.",
+          promptKind: "part-of-speech",
+          tone: "hint",
+        };
+      }
+      const pos = cue.partOfSpeech;
+      const variant = pickVariant([
+        `It's a ${pos}.`,
+        `The word is a ${pos}.`,
+        `That's a ${pos}.`,
+      ]);
       return {
         label: "Pronouncer",
-        displayText:
-          cue?.partOfSpeech ?? "Part of speech is not available in the active dictionary source yet.",
-        speechText:
-          cue?.partOfSpeech
-            ? `Part of speech: ${cue.partOfSpeech}.`
-            : "Part of speech is not available in the active dictionary source yet.",
+        displayText: variant,
+        speechText: variant,
         promptKind: "part-of-speech",
         tone: "hint",
       };
+    }
     case "all-info": {
       const allInfoCopy = buildAllInfoCopy(word, cue);
 
@@ -288,68 +340,53 @@ export function buildPronouncerAgentReply(args: {
       };
     }
     case "start-over": {
-      const displayVariant = pickVariant([
-        "Say or tap start over while spelling to clear the captured letters. The Bee does not allow reordered letters after a restart.",
-        "You can restart by saying or tapping start over. Bear in mind that Bee rules do not allow reordering earlier letters after a restart.",
-        "To clear your letters and begin again, say or tap start over. Note that Bee rules prohibit reordering letters once you restart.",
-      ]);
-      const speechVariant = pickVariant([
-        "Say start over while spelling to clear the captured letters. In Bee rules, earlier letters may not be reordered after a restart.",
-        "To restart, say start over. Remember that once you restart, you cannot reorder any letters you already gave.",
-        "Go ahead and say start over to clear your letters. Keep in mind that Bee rules do not let you rearrange letters after a restart.",
-      ]);
+      const variant = "Say start over to clear your letters.";
       return {
         label: "Pronouncer",
-        displayText: displayVariant,
-        speechText: speechVariant,
+        displayText: variant,
+        speechText: variant,
         promptKind: null,
         tone: "system",
       };
     }
     case "ready-to-spell": {
-      const displayVariant = pickVariant([
-        "Proceed when ready. Tap Talk and spell the letters aloud when you are set.",
-        "Whenever you are set, begin spelling the word letter by letter.",
-        "Take your time. Start spelling when you feel confident.",
-      ]);
-      const speechVariant = pickVariant([
-        "Proceed when ready. Tap talk and start spelling when you are set.",
-        "Whenever you are set, go ahead and spell the word letter by letter.",
-        "Take your time. Begin spelling when you feel confident.",
+      const variant = pickVariant([
+        "Whenever you're ready.",
+        "Go ahead.",
       ]);
       return {
         label: "Pronouncer",
-        displayText: displayVariant,
-        speechText: speechVariant,
+        displayText: variant,
+        speechText: variant,
         promptKind: null,
         tone: "system",
       };
     }
     case "disallowed": {
-      const disallowedVariant = pickVariant([
-        "I can repeat the word, give the definition, part of speech, origin, or use it in a sentence. I cannot give spelling clues.",
-        "Sorry, I am not allowed to help with spelling directly. I can repeat the word, give the definition, part of speech, origin, or use it in a sentence.",
-        "That is not something I can help with in a Bee. Try asking me to repeat the word, give the definition, part of speech, origin, or use it in a sentence.",
+      const variant = pickVariant([
+        "I can't help with that.",
+        "That's not allowed in a Bee.",
+        "I can't give spelling clues.",
       ]);
       return {
         label: "Pronouncer",
-        displayText: disallowedVariant,
-        speechText: disallowedVariant,
+        displayText: variant,
+        speechText: variant,
         promptKind: null,
         tone: "system",
       };
     }
     case "unknown":
     default: {
-      const unknownVariant = pickVariant([
-        "Try a Bee-style request such as repeat, definition, part of speech, sentence, or origin.",
-        "I did not quite catch that. You can ask me to repeat the word, give the definition, part of speech, sentence, or origin.",
-        "Hmm, I am not sure what you need. Try asking to repeat the word, get the definition, part of speech, sentence, or origin.",
+      const variant = pickVariant([
+        "I didn't catch that.",
+        "Could you say that again?",
+        "I didn't get that.",
       ]);
       return {
         label: "Pronouncer",
-        displayText: unknownVariant,
-        speechText: unknownVariant,
+        displayText: variant,
+        speechText: variant,
         promptKind: null,
         tone: "system",
       };

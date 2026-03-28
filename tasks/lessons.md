@@ -33,3 +33,5 @@
 9. `bestStreak` is a session-level stat and must be reset in `beginSession`, not just `advanceWord`; otherwise it carries across drills.
 10. Write-only state variables (like `agentTranscript` that was set but never read) are dead weight and should be removed; they add render cycles and confuse future readers.
 11. Cloud integrations and voice pipeline code should be separated from bug-fix commits for clean git history; mixed commits make bisect and revert harder.
+12. In a spelling training app, any UI element that displays speech recognition transcripts (raw or processed) is a cheating vector — it can leak the target word or partial spelling clues. Evaluate every display element against the core training goal: if the user is not supposed to see the word, they should not see what the system "heard" either.
+13. When evaluating whether to remove a UI element, check the product goal first, not just technical dependencies; a technically safe element can still be a product-level defect.

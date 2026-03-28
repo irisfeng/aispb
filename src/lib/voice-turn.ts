@@ -144,7 +144,9 @@ function sanitizeLetters(value: string) {
 }
 
 function fallbackInterpretTranscript(transcript: string): VoiceTurnResultPayload {
-  const normalizedAttempt = normalizeSpokenSpellingAttempt(transcript);
+  const normalizedAttempt = normalizeSpokenSpellingAttempt(transcript, {
+    allowWholeWordFallback: true,
+  });
   const intent = classifyPronouncerAgentIntent(transcript);
 
   if (normalizedAttempt.command === "start-over") {

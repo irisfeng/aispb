@@ -241,14 +241,12 @@ export function AispbApp() {
     defaultSettings.roundDurationSeconds,
   );
   const [attemptDraft, setAttemptDraft] = useState("");
-  const [heardTranscript, setHeardTranscript] = useState("");
   const [manualUtteranceValue, setManualUtteranceValue] = useState("");
   const [speechCaptureState, setSpeechCaptureState] =
     useState<SpeechCaptureState>("unsupported");
   const [voiceCaptureMode, setVoiceCaptureMode] =
     useState<VoiceCaptureMode>(null);
-  const [speechTranscript, setSpeechTranscript] = useState("");
-  const [speechInterimTranscript, setSpeechInterimTranscript] = useState("");
+  const [, setSpeechTranscript] = useState("");
   const [spellingTranscript, setSpellingTranscript] = useState("");
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [status, setStatus] = useState<SubmissionState>("idle");
@@ -328,10 +326,6 @@ export function AispbApp() {
   const speechRecognitionSupported =
     (cloudVoiceTurnAvailable && browserRecordingSupported) ||
     Boolean(getSpeechRecognitionConstructor());
-  const combinedSpeechTranscript = [speechTranscript, speechInterimTranscript]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
   const shouldShowManualFallback =
     !speechRecognitionSupported || speechCaptureState === "error";
   const dueNotebookCount = notebookEntries.filter(
@@ -362,10 +356,6 @@ export function AispbApp() {
       Math.max(sessionCorrectCount + sessionMissCount, 1)) *
       100,
   );
-  const liveTranscriptDisplay =
-    speechCaptureState === "listening"
-      ? combinedSpeechTranscript
-      : heardTranscript;
   const voiceStatusLabel = cloudVoiceTurnAvailable
     ? "cloud voice ready"
     : hasExternalPronouncer
@@ -373,16 +363,6 @@ export function AispbApp() {
       : browserSpeechReady
         ? "browser fallback"
         : "voice unavailable";
-  const talkStatusLabel =
-    speechCaptureState === "listening"
-      ? "listening"
-      : speechCaptureState === "processing"
-        ? cloudVoiceTurnAvailable
-          ? "routing through cloud"
-          : "routing"
-        : speechCaptureState === "unsupported"
-          ? "manual fallback"
-          : "ready";
   const talkActionLabel =
     speechCaptureState === "listening" && voiceCaptureMode === "talk"
       ? "Listening... tap to finish"
@@ -421,10 +401,6 @@ export function AispbApp() {
     return provider;
   });
   const recentFeed = feed.slice(0, 3);
-  const safeLiveTranscriptDisplay =
-    currentWord && status === "idle"
-      ? maskWordInVisibleText(liveTranscriptDisplay, currentWord)
-      : liveTranscriptDisplay;
   const safeSpellingTranscript =
     currentWord && status === "idle"
       ? maskWordInVisibleText(spellingTranscript, currentWord)
@@ -476,7 +452,6 @@ export function AispbApp() {
     latestSpeechTranscriptRef.current = "";
     latestSpeechInterimTranscriptRef.current = "";
     setSpeechTranscript("");
-    setSpeechInterimTranscript("");
     setSpeechError(null);
 
     if (clearAttemptDraft) {
@@ -546,14 +521,18 @@ export function AispbApp() {
     stopActiveAudio();
     await playEarcon(kind);
 
+    function pick(variants: string[]): string {
+      return variants[Math.floor(Math.random() * variants.length)];
+    }
+
     const speechText =
       kind === "correct"
-        ? "Correct."
+        ? pick(["That is correct.", "Correct.", "That's right.", "Yes, that is correct."])
         : kind === "incorrect"
-          ? "That's incorrect."
+          ? pick(["That is incorrect.", "I'm sorry, that is incorrect.", "Not quite."])
           : kind === "timeout"
-            ? "Time."
-            : "Start over.";
+            ? pick(["Time is up.", "That's time.", "Time."])
+            : pick(["Starting over.", "Let's start over."]);
 
     await playPronouncerText(speechText);
   }
@@ -565,7 +544,9 @@ export function AispbApp() {
   function interpretVoiceTurnLocally(
     transcript: string,
   ): VoiceTurnResultPayload {
-    const normalizedAttempt = normalizeSpokenSpellingAttempt(transcript);
+    const normalizedAttempt = normalizeSpokenSpellingAttempt(transcript, {
+      allowWholeWordFallback: true,
+    });
     const intent = classifyPronouncerAgentIntent(transcript);
 
     if (normalizedAttempt.command === "start-over") {
@@ -689,7 +670,7 @@ export function AispbApp() {
     const capturedRoundId = roundIdRef.current;
     const transcript = result.transcript.trim();
 
-    setHeardTranscript(transcript);
+
 
     const roundStillActive = () =>
       !roundLockedRef.current && roundIdRef.current === capturedRoundId;
@@ -768,7 +749,6 @@ export function AispbApp() {
     const trimmedTranscript = rawTranscript.trim();
 
     if (!trimmedTranscript) {
-      setHeardTranscript("");
       setSpeechError("No clear speech was captured.");
       return;
     }
@@ -961,7 +941,6 @@ export function AispbApp() {
             .join(" ")
             .trim();
 
-          setHeardTranscript(combinedTranscript);
           const normalized = normalizeSpokenSpellingAttempt(combinedTranscript);
           setAttemptDraft(normalized.candidate);
 
@@ -980,7 +959,6 @@ export function AispbApp() {
 
           return nextTranscript;
         });
-        setSpeechInterimTranscript(interimChunks.join(" ").trim());
       };
       nextRecognition.onerror = (event) => {
         recognitionHadErrorRef.current = true;
@@ -1005,7 +983,6 @@ export function AispbApp() {
           shouldJudgeSpeechOnEndRef.current = false;
           clearSpeechIdleTimer();
           setSpeechCaptureState("processing");
-          setSpeechInterimTranscript("");
           void handleUnifiedUtterance(transcriptToJudge).finally(() => {
             voiceCaptureModeRef.current = null;
             setVoiceCaptureMode(null);
@@ -1235,7 +1212,6 @@ export function AispbApp() {
     setCurrentIndex(0);
     setSecondsLeft(nextPlan.settings.roundDurationSeconds);
     resetSpeechAttempt();
-    setHeardTranscript("");
     setSpellingTranscript("");
     setStatus("idle");
     setHintsUsed([]);
@@ -1284,7 +1260,6 @@ export function AispbApp() {
       setCurrentIndex((previous) => previous + 1);
       setSecondsLeft(activePlan.settings.roundDurationSeconds);
       resetSpeechAttempt();
-      setHeardTranscript("");
       setSpellingTranscript("");
       setStatus("idle");
       setHintsUsed([]);
@@ -1424,7 +1399,6 @@ export function AispbApp() {
   }
 
   async function requestPronouncerPrompt(kind: DrillPromptKind) {
-    setHeardTranscript(promptLabels[kind]);
     setFeed((previous) => [
       createFeedEntry("You asked", promptLabels[kind], "system"),
       ...previous,
@@ -1455,7 +1429,6 @@ export function AispbApp() {
       return;
     }
 
-    setHeardTranscript(trimmedTranscript);
     const intentKind =
       forcedIntent ?? classifyPronouncerAgentIntent(trimmedTranscript).kind;
 
@@ -1483,7 +1456,6 @@ export function AispbApp() {
     setSpeechCaptureState(speechRecognitionSupported ? "idle" : "unsupported");
     setRestartCount((previous) => previous + 1);
     resetSpeechAttempt();
-    setHeardTranscript("");
     setSpellingTranscript("");
     void playRoundFeedback("reset");
     setFeed((previous) => [
@@ -1604,16 +1576,6 @@ export function AispbApp() {
               >
                 {talkActionLabel}
               </button>
-              <button
-                className="secondary-button justify-center"
-                disabled={
-                  !sessionStarted || sessionComplete || status !== "idle"
-                }
-                onClick={handleStartOver}
-                type="button"
-              >
-                Start Over
-              </button>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -1630,22 +1592,19 @@ export function AispbApp() {
                   {promptLabels[prompt]}
                 </button>
               ))}
+              <button
+                className="action-button min-h-10 rounded-full px-4 py-2"
+                disabled={
+                  !sessionStarted || sessionComplete || status !== "idle"
+                }
+                onClick={handleStartOver}
+                type="button"
+              >
+                Start Over
+              </button>
             </div>
 
             <div className="mt-4 grid gap-3">
-              <article className="rounded-[22px] border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
-                  I heard
-                </p>
-                <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
-                  {safeLiveTranscriptDisplay ||
-                    "Ask for definition, sentence, origin, repeat, or start spelling letters aloud."}
-                </p>
-                <p className="mt-2 text-xs leading-5 text-[color:var(--muted)]">
-                  {talkStatusLabel}
-                </p>
-              </article>
-
               <article className="rounded-[22px] border border-[color:var(--line)] bg-white/70 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
