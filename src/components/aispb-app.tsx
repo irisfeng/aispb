@@ -42,6 +42,12 @@ import {
 } from "@/lib/spoken-spelling";
 import { judgeSpellingAttempt } from "@/lib/spelling-judge";
 import {
+  loadSettingsFromKv,
+  loadProgressFromKv,
+  saveSettingsToKv,
+  saveProgressToKv,
+} from "@/lib/kv-sync";
+import {
   defaultSettings,
   loadProgress,
   loadSettings,
@@ -1074,20 +1080,38 @@ export function AispbApp() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      const nextSettings = loadSettings();
-      const nextProgress = loadProgress();
+      // Load from localStorage immediately for fast startup
+      const localSettings = loadSettings();
+      const localProgress = loadProgress();
       const canRecordAudio =
         typeof window !== "undefined" &&
         typeof MediaRecorder !== "undefined" &&
         Boolean(navigator.mediaDevices?.getUserMedia);
 
-      setSettings(nextSettings);
-      setProgress(nextProgress);
-      setSecondsLeft(nextSettings.roundDurationSeconds);
+      setSettings(localSettings);
+      setProgress(localProgress);
+      setSecondsLeft(localSettings.roundDurationSeconds);
       setBrowserSpeechReady(
         typeof window !== "undefined" && "speechSynthesis" in window,
       );
       setStorageReady(true);
+
+      // Then try KV — if available, overwrite with server data
+      void Promise.all([loadSettingsFromKv(), loadProgressFromKv()])
+        .then(([kvSettings, kvProgress]) => {
+          if (kvSettings) {
+            setSettings(kvSettings);
+            saveSettings(kvSettings); // sync back to localStorage
+          }
+          if (kvProgress) {
+            setProgress(kvProgress);
+            saveProgress(kvProgress); // sync back to localStorage
+          }
+        })
+        .catch(() => {
+          // KV unavailable — localStorage is fine
+        });
+
       void fetchPronouncerStatus()
         .then((nextStatus) => {
           setPronouncerStatus(nextStatus);
@@ -1137,6 +1161,7 @@ export function AispbApp() {
     }
 
     saveSettings(settings);
+    void saveSettingsToKv(settings);
   }, [settings, storageReady]);
 
   useEffect(() => {
@@ -1145,6 +1170,7 @@ export function AispbApp() {
     }
 
     saveProgress(progress);
+    void saveProgressToKv(progress);
   }, [progress, storageReady]);
 
   useEffect(() => {
