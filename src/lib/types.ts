@@ -55,6 +55,7 @@ export interface WordProgressRecord {
   lastResult: Exclude<SubmissionState, "idle"> | null;
   lastSeenOn: string | null;
   dueOn: string | null;
+  knownAt?: string | null;
 }
 
 export type ProgressMap = Record<string, WordProgressRecord>;

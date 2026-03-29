@@ -64,6 +64,7 @@ export function createEmptyProgress(wordId: string): WordProgressRecord {
     lastResult: null,
     lastSeenOn: null,
     dueOn: null,
+    knownAt: null,
   };
 }
 
@@ -77,6 +78,7 @@ export function createDrillPlan(input: {
   const dueWords = words
     .filter((word) => {
       const record = progress[word.id];
+      if (record?.knownAt) return false;
 
       return Boolean(
         record && record.reviewCount > 0 && (!record.dueOn || record.dueOn <= todayKey),
@@ -102,6 +104,7 @@ export function createDrillPlan(input: {
     words.filter((word) => {
       if (dueIds.has(word.id)) return false;
       const record = progress[word.id];
+      if (record?.knownAt) return false;
       if (!record) return true;
       if (record.dueOn && record.dueOn > todayKey) return false;
       return true;
@@ -134,6 +137,56 @@ export function createDrillPlan(input: {
       reviewCount: selectedReview.length,
       freshCount: selectedFresh.length,
     },
+  };
+}
+
+export function backfillPlan(input: {
+  currentPlan: DrillPlan;
+  excludedIds: Set<string>;
+  allWords: DrillWord[];
+  progress: ProgressMap;
+  todayKey: string;
+}): DrillPlan {
+  const { currentPlan, excludedIds, allWords, progress, todayKey } = input;
+
+  const remainingWords = currentPlan.words.filter(
+    (word) => !excludedIds.has(word.id),
+  );
+  const remainingIds = new Set(remainingWords.map((word) => word.id));
+  const slotsToFill = Math.max(
+    currentPlan.settings.dailyGoal - remainingWords.length,
+    0,
+  );
+
+  const candidates = rankFreshWords(
+    allWords.filter((word) => {
+      if (remainingIds.has(word.id)) return false;
+      const record = progress[word.id];
+      if (record?.knownAt) return false;
+      if (!record) return true;
+      if (record.reviewCount > 0 && (!record.dueOn || record.dueOn <= todayKey)) return false;
+      if (record.dueOn && record.dueOn > todayKey) return false;
+      return true;
+    }),
+    `${todayKey}:${currentPlan.settings.dailyGoal}:backfill:${excludedIds.size}`,
+  );
+
+  const backfilledWords: PlannedDrillWord[] = candidates
+    .slice(0, slotsToFill)
+    .map((word) => ({ ...word, planReason: "fresh" as const }));
+
+  const allPlannedWords = [...remainingWords, ...backfilledWords];
+  const reviewCount = allPlannedWords.filter(
+    (w) => w.planReason === "review",
+  ).length;
+  const freshCount = allPlannedWords.filter(
+    (w) => w.planReason === "fresh",
+  ).length;
+
+  return {
+    ...currentPlan,
+    words: allPlannedWords,
+    stats: { reviewCount, freshCount },
   };
 }
 
