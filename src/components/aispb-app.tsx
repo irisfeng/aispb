@@ -127,7 +127,7 @@ interface FeedEntry {
   content: string;
 }
 
-const goalOptions = [20, 30, 50, 80, 100];
+const goalOptions = [50, 80, 100, 150, 200];
 const roundOptions = [60, 90];
 const suggestedPromptOrder: DrillPromptKind[] = [
   "repeat",
