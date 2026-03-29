@@ -2467,7 +2467,7 @@ export function AispbApp() {
             </div>
           </div>
         </section>
-      ) : (
+      ) : triageActive ? null : (
         <section className="panel px-5 py-6 sm:px-6" id="session">
           <div className="flex items-start justify-between gap-4">
             <div>
