@@ -32,6 +32,7 @@ import {
 } from "@/lib/provider-client";
 import {
   applyDrillResult,
+  backfillPlan,
   createDrillPlan,
   getNotebookEntries,
   getTodayKey,
@@ -313,6 +314,13 @@ export function AispbApp() {
   ]);
   const [feedExpanded, setFeedExpanded] = useState(false);
   const [notebookPageSize, setNotebookPageSize] = useState(10);
+  const [triageActive, setTriageActive] = useState(false);
+  const [triageSelected, setTriageSelected] = useState<Set<string>>(
+    new Set(),
+  );
+  const [triageBackfilledIds, setTriageBackfilledIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const todayKey = getTodayKey();
   const previewPlan = useMemo(
@@ -1257,10 +1265,19 @@ export function AispbApp() {
     const nextPlan = createPreviewPlan(settings, progress);
 
     setActivePlan(nextPlan);
+    setTriageActive(true);
+    setTriageSelected(new Set());
+    setTriageBackfilledIds(new Set());
+  }
+
+  function startDrillFromTriage() {
+    if (!activePlan) return;
+
+    setTriageActive(false);
     setSessionStarted(true);
     setSessionComplete(false);
     setCurrentIndex(0);
-    setSecondsLeft(nextPlan.settings.roundDurationSeconds);
+    setSecondsLeft(activePlan.settings.roundDurationSeconds);
     resetSpeechAttempt();
     setSpellingTranscript("");
     setStatus("idle");
@@ -1275,10 +1292,58 @@ export function AispbApp() {
     setFeed([
       createFeedEntry(
         "Session start",
-        `Today's deck is ready: ${nextPlan.stats.reviewCount} review word(s), ${nextPlan.stats.freshCount} fresh word(s). Round 1 is live.`,
+        `Today's deck is ready: ${activePlan.stats.reviewCount} review word(s), ${activePlan.stats.freshCount} fresh word(s). Round 1 is live.`,
         "system",
       ),
     ]);
+  }
+
+  function confirmTriageSelection() {
+    if (!activePlan || triageSelected.size === 0) return;
+
+    const now = getTodayKey();
+
+    // Mark selected words as known in progress
+    let nextProgress = { ...progress };
+    for (const wordId of triageSelected) {
+      const current = nextProgress[wordId] ?? {
+        wordId,
+        seenCount: 0,
+        correctCount: 0,
+        wrongCount: 0,
+        currentStreak: 0,
+        reviewCount: 0,
+        lastResult: null,
+        lastSeenOn: null,
+        dueOn: null,
+        knownAt: null,
+      };
+      nextProgress = {
+        ...nextProgress,
+        [wordId]: { ...current, knownAt: now },
+      };
+    }
+    setProgress(nextProgress);
+
+    // Backfill the plan
+    const updatedPlan = backfillPlan({
+      currentPlan: activePlan,
+      excludedIds: triageSelected,
+      allWords: wordBank,
+      progress: nextProgress,
+      todayKey: now,
+    });
+
+    const newIds = new Set(
+      updatedPlan.words
+        .filter((w) => !activePlan.words.some((ow) => ow.id === w.id) || triageSelected.has(w.id))
+        .filter((w) => !triageSelected.has(w.id))
+        .map((w) => w.id),
+    );
+
+    setActivePlan(updatedPlan);
+    setTriageSelected(new Set());
+    setTriageBackfilledIds(newIds);
   }
 
   function advanceWord() {
@@ -2065,6 +2130,95 @@ export function AispbApp() {
           </div>
         </aside>
       </section>
+
+      {triageActive && activePlan ? (
+        <section id="session" className="panel space-y-4 px-5 py-6 sm:px-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-[color:var(--foreground)]">
+                Today&apos;s Words ({activePlan.words.length})
+              </h2>
+              <p className="mt-1 text-sm text-[color:var(--muted)]">
+                Tap words you already know
+              </p>
+            </div>
+            <button
+              className="text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--foreground)]"
+              onClick={() => {
+                setTriageActive(false);
+                setActivePlan(null);
+              }}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {[...activePlan.words]
+              .sort((a, b) => a.word.localeCompare(b.word))
+              .map((word) => {
+                const isSelected = triageSelected.has(word.id);
+                const isBackfilled = triageBackfilledIds.has(word.id);
+                return (
+                  <button
+                    key={word.id}
+                    className={[
+                      "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                      isSelected
+                        ? "border-red-300 bg-red-50 text-red-400 line-through"
+                        : isBackfilled
+                          ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                          : "border-[color:var(--line)] bg-white text-[color:var(--foreground)]",
+                    ].join(" ")}
+                    onClick={() => {
+                      setTriageSelected((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(word.id)) {
+                          next.delete(word.id);
+                        } else {
+                          next.add(word.id);
+                        }
+                        return next;
+                      });
+                      if (triageBackfilledIds.size > 0) {
+                        setTriageBackfilledIds(new Set());
+                      }
+                    }}
+                    type="button"
+                  >
+                    {word.word}
+                  </button>
+                );
+              })}
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              className="secondary-button"
+              disabled={triageSelected.size === 0}
+              onClick={confirmTriageSelection}
+              type="button"
+            >
+              Confirm {triageSelected.size} Known
+            </button>
+            <button
+              className="primary-button"
+              onClick={startDrillFromTriage}
+              type="button"
+            >
+              Start Drill
+            </button>
+          </div>
+
+          {Object.values(progress).filter((r) => r.knownAt).length > 0 && (
+            <p className="text-xs text-[color:var(--muted)]">
+              {Object.values(progress).filter((r) => r.knownAt).length} words
+              marked as known in total
+            </p>
+          )}
+        </section>
+      ) : null}
 
       {sessionComplete ? (
         <section
