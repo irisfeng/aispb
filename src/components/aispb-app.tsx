@@ -1302,6 +1302,53 @@ export function AispbApp() {
     ]);
   }
 
+  function startReviewDrill() {
+    if (sessionMisses.length === 0 || !activePlan) return;
+
+    const todayKey = getTodayKey();
+    const reviewPlan: DrillPlan = {
+      id: `review-${todayKey}-${Date.now()}`,
+      createdOn: todayKey,
+      settings: activePlan.settings,
+      words: sessionMisses.map((miss) => ({
+        ...miss.word,
+        planReason: "review" as const,
+      })),
+      stats: {
+        reviewCount: sessionMisses.length,
+        freshCount: 0,
+      },
+      isReviewDrill: true,
+    };
+
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+    setActivePlan(reviewPlan);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setTriageActive(false);
+    setCurrentIndex(0);
+    setStatus("idle");
+    setAttemptDraft("");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setBestStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setSessionMisses([]);
+    setLastPronouncerProvider(null);
+    resetSpeechAttempt();
+    setSpellingTranscript("");
+    setFeed([
+      createFeedEntry(
+        "Review start",
+        `Reviewing ${reviewPlan.words.length} missed word(s). No timer — take your time.`,
+        "system",
+      ),
+    ]);
+  }
+
   function confirmTriageSelection() {
     if (!activePlan || triageSelected.size === 0) return;
 
@@ -1477,6 +1524,8 @@ export function AispbApp() {
   const tick = useEffectEvent(() => {
     // Don't tick while the reveal card is showing (miss or correct)
     if (roundLockedRef.current) return;
+    // No countdown during review drills — take your time
+    if (activePlan?.isReviewDrill) return;
 
     setSecondsLeft((previous) => {
       if (previous <= 1) {
@@ -1714,18 +1763,20 @@ export function AispbApp() {
                 Round {currentIndex + 1}
               </h1>
             </div>
-            <div
-              aria-hidden="true"
-              className="timer-shell"
-              style={{
-                background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
-              }}
-            >
-              <div className="timer-core">
-                <span className="timer-value">{secondsLeft}</span>
-                <span className="timer-label">seconds</span>
+            {!plan.isReviewDrill && (
+              <div
+                aria-hidden="true"
+                className="timer-shell"
+                style={{
+                  background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
+                }}
+              >
+                <div className="timer-core">
+                  <span className="timer-value">{secondsLeft}</span>
+                  <span className="timer-label">seconds</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-[color:var(--ink)] px-5 py-5 text-[color:var(--paper)]">
@@ -2384,6 +2435,13 @@ export function AispbApp() {
                     );
                   })}
                 </div>
+                <button
+                  className="primary-button mt-4 w-full"
+                  onClick={startReviewDrill}
+                  type="button"
+                >
+                  复习错词 ({sessionMisses.length}词)
+                </button>
               </div>
             ) : null}
           </div>
