@@ -59,11 +59,13 @@ import type {
   DrillPlan,
   DrillPromptKind,
   DrillSettings,
+  DrillWord,
   NotebookEntry,
   ProgressMap,
   SubmissionState,
 } from "@/lib/types";
 import { wordBank } from "@/lib/word-bank";
+import { wordBankHigh } from "@/lib/word-bank-high";
 
 type FeedEntryTone = "system" | "hint" | "success" | "danger";
 type SpeechCaptureState =
@@ -168,9 +170,9 @@ function createFeedEntry(
   };
 }
 
-function createPreviewPlan(settings: DrillSettings, progress: ProgressMap) {
+function createPreviewPlan(words: DrillWord[], settings: DrillSettings, progress: ProgressMap) {
   return createDrillPlan({
-    words: wordBank,
+    words,
     settings,
     progress,
     todayKey: getTodayKey(),
@@ -322,10 +324,12 @@ export function AispbApp() {
     new Set(),
   );
 
+  const activeWordBank = settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
+
   const todayKey = getTodayKey();
   const previewPlan = useMemo(
-    () => createPreviewPlan(settings, progress),
-    [settings, progress],
+    () => createPreviewPlan(activeWordBank, settings, progress),
+    [activeWordBank, settings, progress],
   );
   const plan = activePlan ?? previewPlan;
   const sessionWords = plan.words;
@@ -334,11 +338,11 @@ export function AispbApp() {
   const notebookEntries = useMemo(
     () =>
       getNotebookEntries({
-        words: wordBank,
+        words: activeWordBank,
         progress,
         todayKey,
       }),
-    [progress, todayKey],
+    [activeWordBank, progress, todayKey],
   );
   const currentDictionaryCue = currentWord
     ? dictionaryCache[currentWord.id]
@@ -1262,7 +1266,7 @@ export function AispbApp() {
     roundLockedRef.current = false;
     roundIdRef.current += 1;
 
-    const nextPlan = createPreviewPlan(settings, progress);
+    const nextPlan = createPreviewPlan(activeWordBank, settings, progress);
 
     setActivePlan(nextPlan);
     setTriageActive(true);
@@ -1329,7 +1333,7 @@ export function AispbApp() {
     const updatedPlan = backfillPlan({
       currentPlan: activePlan,
       excludedIds: triageSelected,
-      allWords: wordBank,
+      allWords: activeWordBank,
       progress: nextProgress,
       todayKey: now,
     });
@@ -2021,6 +2025,34 @@ export function AispbApp() {
                 <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
                   {voiceStatusLabel}
                 </span>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                  Word bank
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    className={`setting-chip ${settings.wordBank === "spbcn-middle" ? "setting-chip-active" : ""}`}
+                    onClick={() => {
+                      updateSettings({ wordBank: "spbcn-middle" });
+                      setActivePlan(null);
+                    }}
+                    type="button"
+                  >
+                    初中组 ({wordBank.length})
+                  </button>
+                  <button
+                    className={`setting-chip ${settings.wordBank === "spbcn-high" ? "setting-chip-active" : ""}`}
+                    onClick={() => {
+                      updateSettings({ wordBank: "spbcn-high" });
+                      setActivePlan(null);
+                    }}
+                    type="button"
+                  >
+                    高中组 ({wordBankHigh.length})
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4">
