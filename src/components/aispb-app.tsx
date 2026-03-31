@@ -2091,7 +2091,7 @@ export function AispbApp() {
                     }}
                     type="button"
                   >
-                    初中组 ({wordBank.length})
+                    Middle ({wordBank.length})
                   </button>
                   <button
                     className={`setting-chip ${settings.wordBank === "spbcn-high" ? "setting-chip-active" : ""}`}
@@ -2101,7 +2101,7 @@ export function AispbApp() {
                     }}
                     type="button"
                   >
-                    高中组 ({wordBankHigh.length})
+                    High ({wordBankHigh.length})
                   </button>
                 </div>
               </div>
@@ -2440,7 +2440,7 @@ export function AispbApp() {
                   onClick={startReviewDrill}
                   type="button"
                 >
-                  复习错词 ({sessionMisses.length}词)
+                  Review missed ({sessionMisses.length})
                 </button>
               </div>
             ) : null}
