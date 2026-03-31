@@ -54,8 +54,8 @@ function isValidDrillSettings(value: unknown): value is DrillSettings {
     typeof obj.roundDurationSeconds === "number" &&
     VALID_ROUND_DURATIONS.has(obj.roundDurationSeconds) &&
     typeof obj.pronouncerEnabled === "boolean" &&
-    typeof obj.wordBank === "string" &&
-    VALID_WORD_BANKS.has(obj.wordBank)
+    (obj.wordBank === undefined ||
+      (typeof obj.wordBank === "string" && VALID_WORD_BANKS.has(obj.wordBank)))
   );
 }
 
@@ -93,7 +93,13 @@ function isValidProgressMap(value: unknown): value is ProgressMap {
 
 export function loadSettings(): DrillSettings {
   const raw = readJson<unknown>(SETTINGS_KEY, defaultSettings);
-  return isValidDrillSettings(raw) ? raw : defaultSettings;
+  if (!isValidDrillSettings(raw)) return defaultSettings;
+  // Backfill wordBank for existing users who don't have it yet
+  const settings = raw as DrillSettings;
+  if (!settings.wordBank) {
+    return { ...settings, wordBank: "spbcn-middle" };
+  }
+  return settings;
 }
 
 export function loadProgress(): ProgressMap {
