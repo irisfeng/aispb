@@ -28,6 +28,7 @@ export interface DrillSettings {
   dailyGoal: number;
   roundDurationSeconds: number;
   pronouncerEnabled: boolean;
+  wordBank: "spbcn-middle" | "spbcn-high";
 }
 
 export interface PlannedDrillWord extends DrillWord {
@@ -43,6 +44,7 @@ export interface DrillPlan {
     reviewCount: number;
     freshCount: number;
   };
+  isReviewDrill?: boolean;
 }
 
 export interface WordProgressRecord {
