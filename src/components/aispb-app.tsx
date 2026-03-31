@@ -59,11 +59,13 @@ import type {
   DrillPlan,
   DrillPromptKind,
   DrillSettings,
+  DrillWord,
   NotebookEntry,
   ProgressMap,
   SubmissionState,
 } from "@/lib/types";
 import { wordBank } from "@/lib/word-bank";
+import { wordBankHigh } from "@/lib/word-bank-high";
 
 type FeedEntryTone = "system" | "hint" | "success" | "danger";
 type SpeechCaptureState =
@@ -168,9 +170,9 @@ function createFeedEntry(
   };
 }
 
-function createPreviewPlan(settings: DrillSettings, progress: ProgressMap) {
+function createPreviewPlan(words: DrillWord[], settings: DrillSettings, progress: ProgressMap) {
   return createDrillPlan({
-    words: wordBank,
+    words,
     settings,
     progress,
     todayKey: getTodayKey(),
@@ -322,10 +324,12 @@ export function AispbApp() {
     new Set(),
   );
 
+  const activeWordBank = settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
+
   const todayKey = getTodayKey();
   const previewPlan = useMemo(
-    () => createPreviewPlan(settings, progress),
-    [settings, progress],
+    () => createPreviewPlan(activeWordBank, settings, progress),
+    [activeWordBank, settings, progress],
   );
   const plan = activePlan ?? previewPlan;
   const sessionWords = plan.words;
@@ -334,11 +338,11 @@ export function AispbApp() {
   const notebookEntries = useMemo(
     () =>
       getNotebookEntries({
-        words: wordBank,
+        words: activeWordBank,
         progress,
         todayKey,
       }),
-    [progress, todayKey],
+    [activeWordBank, progress, todayKey],
   );
   const currentDictionaryCue = currentWord
     ? dictionaryCache[currentWord.id]
@@ -1262,7 +1266,7 @@ export function AispbApp() {
     roundLockedRef.current = false;
     roundIdRef.current += 1;
 
-    const nextPlan = createPreviewPlan(settings, progress);
+    const nextPlan = createPreviewPlan(activeWordBank, settings, progress);
 
     setActivePlan(nextPlan);
     setTriageActive(true);
@@ -1293,6 +1297,53 @@ export function AispbApp() {
       createFeedEntry(
         "Session start",
         `Today's deck is ready: ${activePlan.stats.reviewCount} review word(s), ${activePlan.stats.freshCount} fresh word(s). Round 1 is live.`,
+        "system",
+      ),
+    ]);
+  }
+
+  function startReviewDrill() {
+    if (sessionMisses.length === 0 || !activePlan) return;
+
+    const todayKey = getTodayKey();
+    const reviewPlan: DrillPlan = {
+      id: `review-${todayKey}-${Date.now()}`,
+      createdOn: todayKey,
+      settings: activePlan.settings,
+      words: sessionMisses.map((miss) => ({
+        ...miss.word,
+        planReason: "review" as const,
+      })),
+      stats: {
+        reviewCount: sessionMisses.length,
+        freshCount: 0,
+      },
+      isReviewDrill: true,
+    };
+
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+    setActivePlan(reviewPlan);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setTriageActive(false);
+    setCurrentIndex(0);
+    setStatus("idle");
+    setAttemptDraft("");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setBestStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setSessionMisses([]);
+    setLastPronouncerProvider(null);
+    resetSpeechAttempt();
+    setSpellingTranscript("");
+    setFeed([
+      createFeedEntry(
+        "Review start",
+        `Reviewing ${reviewPlan.words.length} missed word(s). No timer — take your time.`,
         "system",
       ),
     ]);
@@ -1329,7 +1380,7 @@ export function AispbApp() {
     const updatedPlan = backfillPlan({
       currentPlan: activePlan,
       excludedIds: triageSelected,
-      allWords: wordBank,
+      allWords: activeWordBank,
       progress: nextProgress,
       todayKey: now,
     });
@@ -1473,6 +1524,8 @@ export function AispbApp() {
   const tick = useEffectEvent(() => {
     // Don't tick while the reveal card is showing (miss or correct)
     if (roundLockedRef.current) return;
+    // No countdown during review drills — take your time
+    if (activePlan?.isReviewDrill) return;
 
     setSecondsLeft((previous) => {
       if (previous <= 1) {
@@ -1710,18 +1763,20 @@ export function AispbApp() {
                 Round {currentIndex + 1}
               </h1>
             </div>
-            <div
-              aria-hidden="true"
-              className="timer-shell"
-              style={{
-                background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
-              }}
-            >
-              <div className="timer-core">
-                <span className="timer-value">{secondsLeft}</span>
-                <span className="timer-label">seconds</span>
+            {!plan.isReviewDrill && (
+              <div
+                aria-hidden="true"
+                className="timer-shell"
+                style={{
+                  background: `conic-gradient(var(--accent) ${timerDegrees}deg, rgba(255,255,255,0.32) ${timerDegrees}deg)`,
+                }}
+              >
+                <div className="timer-core">
+                  <span className="timer-value">{secondsLeft}</span>
+                  <span className="timer-label">seconds</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="mt-5 rounded-[28px] border border-[color:var(--line)] bg-[color:var(--ink)] px-5 py-5 text-[color:var(--paper)]">
@@ -2021,6 +2076,34 @@ export function AispbApp() {
                 <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
                   {voiceStatusLabel}
                 </span>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                  Word bank
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    className={`setting-chip ${settings.wordBank === "spbcn-middle" ? "setting-chip-active" : ""}`}
+                    onClick={() => {
+                      updateSettings({ wordBank: "spbcn-middle" });
+                      setActivePlan(null);
+                    }}
+                    type="button"
+                  >
+                    初中组 ({wordBank.length})
+                  </button>
+                  <button
+                    className={`setting-chip ${settings.wordBank === "spbcn-high" ? "setting-chip-active" : ""}`}
+                    onClick={() => {
+                      updateSettings({ wordBank: "spbcn-high" });
+                      setActivePlan(null);
+                    }}
+                    type="button"
+                  >
+                    高中组 ({wordBankHigh.length})
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4">
@@ -2352,6 +2435,13 @@ export function AispbApp() {
                     );
                   })}
                 </div>
+                <button
+                  className="primary-button mt-4 w-full"
+                  onClick={startReviewDrill}
+                  type="button"
+                >
+                  复习错词 ({sessionMisses.length}词)
+                </button>
               </div>
             ) : null}
           </div>

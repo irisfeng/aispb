@@ -7,6 +7,7 @@ export const defaultSettings: DrillSettings = {
   dailyGoal: 50,
   roundDurationSeconds: 60,
   pronouncerEnabled: true,
+  wordBank: "spbcn-middle",
 };
 
 function canUseStorage() {
@@ -38,6 +39,7 @@ function readJson<T>(key: string, fallback: T): T {
 
 const VALID_DAILY_GOALS = new Set([20, 30, 50, 80, 100]);
 const VALID_ROUND_DURATIONS = new Set([60, 90]);
+const VALID_WORD_BANKS = new Set(["spbcn-middle", "spbcn-high"]);
 
 function isValidDrillSettings(value: unknown): value is DrillSettings {
   if (typeof value !== "object" || value === null) {
@@ -51,7 +53,9 @@ function isValidDrillSettings(value: unknown): value is DrillSettings {
     VALID_DAILY_GOALS.has(obj.dailyGoal) &&
     typeof obj.roundDurationSeconds === "number" &&
     VALID_ROUND_DURATIONS.has(obj.roundDurationSeconds) &&
-    typeof obj.pronouncerEnabled === "boolean"
+    typeof obj.pronouncerEnabled === "boolean" &&
+    (obj.wordBank === undefined ||
+      (typeof obj.wordBank === "string" && VALID_WORD_BANKS.has(obj.wordBank)))
   );
 }
 
@@ -89,7 +93,13 @@ function isValidProgressMap(value: unknown): value is ProgressMap {
 
 export function loadSettings(): DrillSettings {
   const raw = readJson<unknown>(SETTINGS_KEY, defaultSettings);
-  return isValidDrillSettings(raw) ? raw : defaultSettings;
+  if (!isValidDrillSettings(raw)) return defaultSettings;
+  // Backfill wordBank for existing users who don't have it yet
+  const settings = raw as DrillSettings;
+  if (!settings.wordBank) {
+    return { ...settings, wordBank: "spbcn-middle" };
+  }
+  return settings;
 }
 
 export function loadProgress(): ProgressMap {
