@@ -1,4 +1,4 @@
-import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import type { DrillSettings, ProgressMap, WordProgressRecord } from "@/lib/types";
 
 function getClient() {

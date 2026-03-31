@@ -49,6 +49,12 @@ import {
   saveProgressToKv,
 } from "@/lib/kv-sync";
 import {
+  loadSettingsFromSupabase,
+  loadProgressFromSupabase,
+  saveSettingsToSupabase,
+  saveProgressToSupabase,
+} from "@/lib/supabase-sync";
+import {
   defaultSettings,
   loadProgress,
   loadSettings,
@@ -244,7 +250,12 @@ declare global {
   }
 }
 
-export function AispbApp() {
+interface AispbAppProps {
+  authUser?: { id: string; nickname: string };
+  onSignOut?: () => void;
+}
+
+export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [storageReady, setStorageReady] = useState(false);
   const kvLoadedRef = useRef(false);
   const [settings, setSettings] = useState<DrillSettings>(defaultSettings);
@@ -1111,22 +1122,29 @@ export function AispbApp() {
       );
       setStorageReady(true);
 
-      // Then try KV — if available, overwrite with server data.
+      // Load cloud data — Supabase if authenticated, KV otherwise.
       // The kvLoadedRef guard prevents the save effects from writing
-      // stale/empty local data back to KV before the cloud data arrives.
-      void Promise.all([loadSettingsFromKv(), loadProgressFromKv()])
-        .then(([kvSettings, kvProgress]) => {
-          if (kvSettings) {
-            setSettings(kvSettings);
-            saveSettings(kvSettings); // sync back to localStorage
+      // stale/empty local data back to the cloud before the cloud data arrives.
+      const cloudLoad = authUser
+        ? Promise.all([
+            loadSettingsFromSupabase(authUser.id),
+            loadProgressFromSupabase(authUser.id),
+          ])
+        : Promise.all([loadSettingsFromKv(), loadProgressFromKv()]);
+
+      void cloudLoad
+        .then(([cloudSettings, cloudProgress]) => {
+          if (cloudSettings) {
+            setSettings(cloudSettings);
+            saveSettings(cloudSettings);
           }
-          if (kvProgress) {
-            setProgress(kvProgress);
-            saveProgress(kvProgress); // sync back to localStorage
+          if (cloudProgress) {
+            setProgress(cloudProgress);
+            saveProgress(cloudProgress);
           }
         })
         .catch(() => {
-          // KV unavailable — localStorage is fine
+          // Cloud unavailable — localStorage is fine
         })
         .finally(() => {
           kvLoadedRef.current = true;
@@ -1173,6 +1191,7 @@ export function AispbApp() {
         window.speechSynthesis.cancel();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only init; authUser is stable for the component's lifetime
   }, []);
 
   useEffect(() => {
@@ -1185,9 +1204,13 @@ export function AispbApp() {
     // Only write to KV after the initial KV load completes to avoid
     // overwriting cloud data with stale/empty local data.
     if (kvLoadedRef.current) {
-      void saveSettingsToKv(settings);
+      if (authUser) {
+        void saveSettingsToSupabase(authUser.id, settings);
+      } else {
+        void saveSettingsToKv(settings);
+      }
     }
-  }, [settings, storageReady]);
+  }, [settings, storageReady, authUser]);
 
   useEffect(() => {
     if (!storageReady) {
@@ -1197,9 +1220,13 @@ export function AispbApp() {
     saveProgress(progress);
 
     if (kvLoadedRef.current) {
-      void saveProgressToKv(progress);
+      if (authUser) {
+        void saveProgressToSupabase(authUser.id, progress);
+      } else {
+        void saveProgressToKv(progress);
+      }
     }
-  }, [progress, storageReady]);
+  }, [progress, storageReady, authUser]);
 
   useEffect(() => {
     if (!sessionStarted || !currentWord) {
@@ -2077,6 +2104,24 @@ export function AispbApp() {
                   {voiceStatusLabel}
                 </span>
               </div>
+
+              {authUser && (
+                <div className="mt-3 flex items-center justify-between rounded-2xl border border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-2.5">
+                  <span className="text-sm font-semibold text-[color:var(--foreground)]">
+                    {authUser.nickname}
+                  </span>
+                  <button
+                    className="rounded-full bg-[color:var(--muted)]/10 px-3 py-1 text-xs font-semibold text-[color:var(--muted)]"
+                    onClick={async () => {
+                      await fetch("/api/auth/logout", { method: "POST" });
+                      onSignOut?.();
+                    }}
+                    type="button"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
 
               <div className="mt-4">
                 <p className="text-sm font-semibold text-[color:var(--foreground)]">

@@ -1,5 +1,5 @@
-import { AispbApp } from "@/components/aispb-app";
+import { AppShell } from "@/components/app-shell";
 
 export default function Home() {
-  return <AispbApp />;
+  return <AppShell />;
 }
