@@ -2147,7 +2147,9 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                           );
                           setSessionMissCount((prev) => Math.max(prev - 1, 0));
                           setSessionCorrectCount((prev) => prev + 1);
-                          setStatus("correct");
+                          // Advance to next word directly (don't set status to "correct"
+                          // which would hide the "Next word" button and leave user stuck)
+                          advanceWord();
                         }}
                         type="button"
                       >
@@ -2186,15 +2188,13 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   ) : null;
                 })()}
 
-                {status !== "correct" ? (
-                  <button
-                    className="primary-button mt-4 w-full"
-                    onClick={() => advanceWord()}
-                    type="button"
-                  >
-                    Next word
-                  </button>
-                ) : null}
+                <button
+                  className="primary-button mt-4 w-full"
+                  onClick={() => advanceWord()}
+                  type="button"
+                >
+                  Next word
+                </button>
               </div>
             ) : null}
 
