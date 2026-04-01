@@ -373,6 +373,18 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const dueNotebookCount = notebookEntries.filter(
     (entry) => !entry.progress.dueOn || entry.progress.dueOn <= todayKey,
   ).length;
+  const weakReviewCandidates = useMemo(() => {
+    return notebookEntries
+      .filter((e) => e.progress.wrongCount > 0 && !e.progress.knownAt)
+      .sort((a, b) => {
+        // Prioritize due words first
+        const aDue = a.progress.reviewCount > 0 && (!a.progress.dueOn || a.progress.dueOn <= todayKey) ? 1 : 0;
+        const bDue = b.progress.reviewCount > 0 && (!b.progress.dueOn || b.progress.dueOn <= todayKey) ? 1 : 0;
+        if (aDue !== bDue) return bDue - aDue;
+        return b.progress.wrongCount - a.progress.wrongCount;
+      })
+      .slice(0, 30);
+  }, [notebookEntries, todayKey]);
   const filteredNotebookEntries = notebookEntries.filter((entry) => {
     const p = entry.progress;
     if (notebookFilter === "due")
@@ -1382,6 +1394,52 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     ]);
   }
 
+  function startWeakReviewDrill() {
+    if (weakReviewCandidates.length === 0) return;
+
+    const reviewPlan: DrillPlan = {
+      id: `weak-review-${todayKey}-${Date.now()}`,
+      createdOn: todayKey,
+      settings,
+      words: weakReviewCandidates.map((entry) => ({
+        ...entry.word,
+        planReason: "review" as const,
+      })),
+      stats: {
+        reviewCount: weakReviewCandidates.length,
+        freshCount: 0,
+      },
+      isReviewDrill: true,
+    };
+
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+    setActivePlan(reviewPlan);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setTriageActive(false);
+    setCurrentIndex(0);
+    setStatus("idle");
+    setAttemptDraft("");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setBestStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setSessionMisses([]);
+    setLastPronouncerProvider(null);
+    resetSpeechAttempt();
+    setSpellingTranscript("");
+    setFeed([
+      createFeedEntry(
+        "Weak review start",
+        `Reviewing ${reviewPlan.words.length} weak word(s). No timer — take your time.`,
+        "system",
+      ),
+    ]);
+  }
+
   function confirmTriageSelection() {
     if (!activePlan || triageSelected.size === 0) return;
 
@@ -2254,6 +2312,15 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
               >
                 Begin today&apos;s drill
               </button>
+              {weakReviewCandidates.length > 0 && (
+                <button
+                  className="secondary-button"
+                  onClick={startWeakReviewDrill}
+                  type="button"
+                >
+                  Review weak words ({weakReviewCandidates.length})
+                </button>
+              )}
               <a className="secondary-button" href="#session">
                 Jump to session
               </a>
@@ -2454,6 +2521,15 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
               >
                 Start next drill
               </button>
+              {weakReviewCandidates.length > 0 && (
+                <button
+                  className="secondary-button"
+                  onClick={startWeakReviewDrill}
+                  type="button"
+                >
+                  Review weak words ({weakReviewCandidates.length})
+                </button>
+              )}
               <a className="secondary-button" href="#notebook">
                 Review notebook
               </a>
