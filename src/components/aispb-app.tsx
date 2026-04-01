@@ -1917,13 +1917,40 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   <p className="font-[family:var(--font-display)] text-3xl leading-none text-[color:var(--foreground)]">
                     {currentWord.word}
                   </p>
-                  <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
-                    {status === "correct"
-                      ? "correct"
-                      : status === "timeout"
-                        ? "timed out"
-                        : "miss"}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                      {status === "correct"
+                        ? "correct"
+                        : status === "timeout"
+                          ? "timed out"
+                          : "miss"}
+                    </span>
+                    {status === "incorrect" && (
+                      <button
+                        className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-bold text-white"
+                        onClick={() => {
+                          // Override incorrect → correct: re-apply with correct result
+                          setProgress((prev) =>
+                            applyDrillResult({
+                              progress: prev,
+                              wordId: currentWord.id,
+                              result: "correct",
+                              todayKey,
+                            }),
+                          );
+                          setSessionMisses((prev) =>
+                            prev.filter((m) => m.word.id !== currentWord.id),
+                          );
+                          setSessionMissCount((prev) => Math.max(prev - 1, 0));
+                          setSessionCorrectCount((prev) => prev + 1);
+                          setStatus("correct");
+                        }}
+                        type="button"
+                      >
+                        I&apos;m correct ✓
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {status !== "correct" && (() => {
