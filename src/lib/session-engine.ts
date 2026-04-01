@@ -206,16 +206,13 @@ export function applyDrillResult(input: {
   };
 
   if (result === "correct") {
-    const nextStreak = current.currentStreak + 1;
-    const nextReviewCount =
-      current.reviewCount > 0 && nextStreak >= 2
-        ? Math.max(current.reviewCount - 1, 0)
-        : current.reviewCount;
-
+    // Competition prep mode: correct once = mastered, never scheduled again.
+    // This maximizes word coverage (8500+ words in ~30 days).
     next.correctCount = current.correctCount + 1;
-    next.currentStreak = nextStreak;
-    next.reviewCount = nextReviewCount;
-    next.dueOn = nextReviewCount > 0 ? addDays(todayKey, 1) : addDays(todayKey, nextStreak >= 4 ? 7 : nextStreak >= 2 ? 5 : 2);
+    next.currentStreak = current.currentStreak + 1;
+    next.reviewCount = 0;
+    next.dueOn = null;
+    next.knownAt = todayKey;
   } else {
     next.wrongCount = current.wrongCount + 1;
     next.currentStreak = 0;
