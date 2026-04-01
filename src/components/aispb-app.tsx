@@ -336,6 +336,11 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [triageBackfilledIds, setTriageBackfilledIds] = useState<Set<string>>(
     new Set(),
   );
+  const [browseActive, setBrowseActive] = useState(false);
+  const [browseWords, setBrowseWords] = useState<DrillWord[]>([]);
+  const [browseIndex, setBrowseIndex] = useState(0);
+  const [browseKnown, setBrowseKnown] = useState(0);
+  const [browseUnknown, setBrowseUnknown] = useState(0);
 
   const activeWordBank = settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
 
@@ -1440,6 +1445,70 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     ]);
   }
 
+  function startBrowseMode() {
+    // Get unseen words (no progress record OR not knownAt) from active word bank
+    const unseenWords = activeWordBank.filter((w) => {
+      const record = progress[w.id];
+      if (!record) return true;
+      if (record.knownAt) return false;
+      if (record.seenCount === 0) return true;
+      return false;
+    });
+
+    // Shuffle deterministically using today's date
+    const seed = todayKey + ":browse";
+    const shuffled = [...unseenWords].sort((a, b) => {
+      const hashA = (a.id + seed).split("").reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) >>> 0, 0);
+      const hashB = (b.id + seed).split("").reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) >>> 0, 0);
+      return hashA - hashB;
+    });
+
+    const batch = shuffled.slice(0, 50);
+    if (batch.length === 0) return;
+
+    setBrowseWords(batch);
+    setBrowseIndex(0);
+    setBrowseKnown(0);
+    setBrowseUnknown(0);
+    setBrowseActive(true);
+  }
+
+  function handleBrowseResponse(known: boolean) {
+    const word = browseWords[browseIndex];
+    if (!word) return;
+
+    if (known) {
+      // Mark as known — will never appear in drills
+      setProgress((prev) => ({
+        ...prev,
+        [word.id]: {
+          ...(prev[word.id] ?? {
+            wordId: word.id,
+            seenCount: 0,
+            correctCount: 0,
+            wrongCount: 0,
+            currentStreak: 0,
+            reviewCount: 0,
+            lastResult: null,
+            lastSeenOn: null,
+            dueOn: null,
+          }),
+          knownAt: todayKey,
+        },
+      }));
+      setBrowseKnown((prev) => prev + 1);
+    } else {
+      setBrowseUnknown((prev) => prev + 1);
+    }
+
+    // Advance or finish
+    if (browseIndex + 1 >= browseWords.length) {
+      setBrowseActive(false);
+    } else {
+      setBrowseIndex((prev) => prev + 1);
+    }
+  }
+
   function confirmTriageSelection() {
     if (!activePlan || triageSelected.size === 0) return;
 
@@ -1839,6 +1908,83 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
           </div>
         ) : null}
       </article>
+    );
+  }
+
+  if (browseActive && browseWords.length > 0) {
+    const currentBrowseWord = browseWords[browseIndex];
+    const browseDone = browseIndex >= browseWords.length;
+
+    if (browseDone || !currentBrowseWord) {
+      // Summary screen
+      return (
+        <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+          <section className="panel px-5 py-6 sm:px-7 sm:py-7">
+            <p className="eyebrow">Quick Browse Complete</p>
+            <h1 className="mt-3 font-[family:var(--font-display)] text-3xl text-[color:var(--foreground)]">
+              {browseKnown + browseUnknown} words reviewed
+            </h1>
+            <div className="mt-4 flex gap-4">
+              <div className="rounded-2xl bg-[color:var(--accent-soft)] px-4 py-3 text-center">
+                <p className="text-2xl font-bold text-[color:var(--foreground)]">{browseKnown}</p>
+                <p className="text-xs text-[color:var(--muted)]">Known</p>
+              </div>
+              <div className="rounded-2xl bg-[color:var(--signal)]/10 px-4 py-3 text-center">
+                <p className="text-2xl font-bold text-[color:var(--foreground)]">{browseUnknown}</p>
+                <p className="text-xs text-[color:var(--muted)]">To practice</p>
+              </div>
+            </div>
+            <button
+              className="primary-button mt-6 w-full"
+              onClick={() => setBrowseActive(false)}
+              type="button"
+            >
+              Back to home
+            </button>
+          </section>
+        </main>
+      );
+    }
+
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+        <section className="panel px-5 py-6 sm:px-7 sm:py-7">
+          <div className="flex items-center justify-between">
+            <p className="eyebrow">Quick Browse</p>
+            <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-[color:var(--muted)]">
+              {browseIndex + 1} / {browseWords.length}
+            </span>
+          </div>
+          <div className="mt-6 text-center">
+            <p className="font-[family:var(--font-display)] text-4xl leading-none text-[color:var(--foreground)] sm:text-5xl">
+              {currentBrowseWord.word}
+            </p>
+          </div>
+          <div className="mt-8 flex gap-3">
+            <button
+              className="flex-1 rounded-2xl border border-[color:var(--signal)]/30 bg-[color:var(--signal)]/5 px-4 py-4 text-base font-bold text-[color:var(--signal)]"
+              onClick={() => handleBrowseResponse(false)}
+              type="button"
+            >
+              Don&apos;t know ✗
+            </button>
+            <button
+              className="flex-1 rounded-2xl border border-[color:var(--accent)]/30 bg-[color:var(--accent)]/10 px-4 py-4 text-base font-bold text-[color:var(--accent)]"
+              onClick={() => handleBrowseResponse(true)}
+              type="button"
+            >
+              Know it ✓
+            </button>
+          </div>
+          <button
+            className="mt-3 w-full rounded-2xl border border-[color:var(--line)] bg-white/70 px-4 py-2.5 text-sm font-semibold text-[color:var(--muted)]"
+            onClick={() => setBrowseActive(false)}
+            type="button"
+          >
+            Exit browse
+          </button>
+        </section>
+      </main>
     );
   }
 
@@ -2321,6 +2467,13 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   Review weak words ({weakReviewCandidates.length})
                 </button>
               )}
+              <button
+                className="secondary-button"
+                onClick={startBrowseMode}
+                type="button"
+              >
+                Quick browse
+              </button>
               <a className="secondary-button" href="#session">
                 Jump to session
               </a>
