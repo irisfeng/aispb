@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.10.0",
+    "@supabase/supabase-js": "^2.101.0",
     "@types/ws": "^8.18.1",
     "@vercel/kv": "^2.0.0",
     "@volcengine/openapi": "^1.36.0",
