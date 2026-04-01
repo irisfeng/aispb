@@ -1,3 +1,6 @@
+-- AISPB Multi-User Schema
+-- Run this in Supabase SQL Editor after creating your project
+
 -- User settings (one row per user)
 create table user_settings (
   user_id uuid references auth.users on delete cascade primary key,
@@ -29,16 +32,24 @@ alter table user_settings enable row level security;
 alter table user_progress enable row level security;
 
 -- RLS policies: users can only access their own data
+-- Settings
 create policy "Users can select own settings"
   on user_settings for select using (auth.uid() = user_id);
 create policy "Users can insert own settings"
   on user_settings for insert with check (auth.uid() = user_id);
 create policy "Users can update own settings"
-  on user_settings for update using (auth.uid() = user_id);
+  on user_settings for update using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+create policy "Users can delete own settings"
+  on user_settings for delete using (auth.uid() = user_id);
 
+-- Progress
 create policy "Users can select own progress"
   on user_progress for select using (auth.uid() = user_id);
 create policy "Users can insert own progress"
   on user_progress for insert with check (auth.uid() = user_id);
 create policy "Users can update own progress"
-  on user_progress for update using (auth.uid() = user_id);
+  on user_progress for update using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+create policy "Users can delete own progress"
+  on user_progress for delete using (auth.uid() = user_id);

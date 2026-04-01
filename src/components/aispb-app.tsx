@@ -58,8 +58,10 @@ import {
   defaultSettings,
   loadProgress,
   loadSettings,
+  migrateLocalStorageToUser,
   saveProgress,
   saveSettings,
+  setStorageUser,
 } from "@/lib/storage";
 import type {
   DrillPlan,
@@ -1106,6 +1108,10 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
+      // Set user context for localStorage namespacing BEFORE any reads
+      setStorageUser(authUser?.id ?? null);
+      if (authUser) migrateLocalStorageToUser();
+
       // Load from localStorage immediately for fast startup
       const localSettings = loadSettings();
       const localProgress = loadProgress();

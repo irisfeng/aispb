@@ -17,7 +17,11 @@ export async function loadSettingsFromSupabase(
     .eq("user_id", userId)
     .single();
 
-  if (error || !data) return null;
+  if (error) {
+    console.error("[supabase-sync] loadSettings error:", error.message);
+    return null;
+  }
+  if (!data) return null;
 
   return {
     dailyGoal: data.daily_goal,
@@ -32,7 +36,7 @@ export async function saveSettingsToSupabase(
   settings: DrillSettings,
 ): Promise<void> {
   const supabase = getClient();
-  await supabase.from("user_settings").upsert({
+  const { error } = await supabase.from("user_settings").upsert({
     user_id: userId,
     daily_goal: settings.dailyGoal,
     round_duration_seconds: settings.roundDurationSeconds,
@@ -40,6 +44,7 @@ export async function saveSettingsToSupabase(
     word_bank: settings.wordBank,
     updated_at: new Date().toISOString(),
   });
+  if (error) console.error("[supabase-sync] saveSettings error:", error.message);
 }
 
 // ---- Progress ----
@@ -53,7 +58,11 @@ export async function loadProgressFromSupabase(
     .select("*")
     .eq("user_id", userId);
 
-  if (error || !data || data.length === 0) return null;
+  if (error) {
+    console.error("[supabase-sync] loadProgress error:", error.message);
+    return null;
+  }
+  if (!data || data.length === 0) return null;
 
   const progress: ProgressMap = {};
   for (const row of data) {
@@ -97,7 +106,8 @@ export async function saveProgressToSupabase(
   if (rows.length === 0) return;
 
   // Batch upsert — Supabase supports this natively
-  await supabase
+  const { error: upsertError } = await supabase
     .from("user_progress")
     .upsert(rows, { onConflict: "user_id,word_id" });
+  if (upsertError) console.error("[supabase-sync] saveProgress error:", upsertError.message);
 }

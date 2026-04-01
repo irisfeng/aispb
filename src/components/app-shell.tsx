@@ -23,15 +23,23 @@ export function AppShell() {
     if (!supabaseConfigured) return;
 
     const supabase = createSupabaseBrowserClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        setAuthUser({
-          id: user.id,
-          nickname: user.user_metadata?.nickname ?? "User",
-        });
-      }
-      setAuthChecked(true);
-    });
+    supabase.auth
+      .getUser()
+      .then(({ data: { user } }) => {
+        if (user) {
+          setAuthUser({
+            id: user.id,
+            nickname: user.user_metadata?.nickname ?? "User",
+          });
+        }
+      })
+      .catch(() => {
+        // Auth check failed (network error, misconfigured Supabase, etc.)
+        // Fall through to login screen
+      })
+      .finally(() => {
+        setAuthChecked(true);
+      });
   }, []);
 
   // Not yet checked — show nothing (avoids flash)

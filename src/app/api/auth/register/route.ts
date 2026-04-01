@@ -14,15 +14,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate inputs
+    // Validate inputs — nickname must be alphanumeric only to prevent
+    // collisions in the nickname→email mapping (e.g., "john-doe" vs "johndoe")
     if (
       !nickname ||
       typeof nickname !== "string" ||
       nickname.length < 2 ||
-      nickname.length > 20
+      nickname.length > 20 ||
+      !/^[a-zA-Z0-9]+$/.test(nickname)
     ) {
       return NextResponse.json(
-        { error: "Nickname must be 2-20 characters" },
+        { error: "Nickname must be 2-20 alphanumeric characters (letters and numbers only)" },
         { status: 400 },
       );
     }
@@ -38,7 +40,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const email = `${nickname.toLowerCase().replace(/[^a-z0-9]/g, "")}@aispb.local`;
+    const email = `${nickname.toLowerCase()}@aispb.local`;
+
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return NextResponse.json(
+        { error: "Registration is not available (server misconfigured)" },
+        { status: 503 },
+      );
+    }
 
     const supabase = await createSupabaseAdminClient();
 
@@ -57,7 +66,11 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      console.error("[auth/register] Supabase error:", error.message);
+      return NextResponse.json(
+        { error: "Registration failed. Please try again." },
+        { status: 400 },
+      );
     }
 
     // Insert default settings for the new user

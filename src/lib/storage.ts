@@ -1,7 +1,27 @@
 import type { DrillSettings, ProgressMap } from "@/lib/types";
 
-const SETTINGS_KEY = "aispb:settings:v1";
-const PROGRESS_KEY = "aispb:progress:v1";
+const LEGACY_SETTINGS_KEY = "aispb:settings:v1";
+const LEGACY_PROGRESS_KEY = "aispb:progress:v1";
+
+// Active user ID — set by setStorageUser() on login, cleared on logout.
+// When set, localStorage keys are namespaced per user to prevent cross-user leakage.
+let activeUserId: string | null = null;
+
+export function setStorageUser(userId: string | null) {
+  activeUserId = userId;
+}
+
+function settingsKey(): string {
+  return activeUserId
+    ? `aispb:${activeUserId}:settings:v1`
+    : LEGACY_SETTINGS_KEY;
+}
+
+function progressKey(): string {
+  return activeUserId
+    ? `aispb:${activeUserId}:progress:v1`
+    : LEGACY_PROGRESS_KEY;
+}
 
 export const defaultSettings: DrillSettings = {
   dailyGoal: 50,
@@ -92,9 +112,8 @@ function isValidProgressMap(value: unknown): value is ProgressMap {
 }
 
 export function loadSettings(): DrillSettings {
-  const raw = readJson<unknown>(SETTINGS_KEY, defaultSettings);
+  const raw = readJson<unknown>(settingsKey(), defaultSettings);
   if (!isValidDrillSettings(raw)) return defaultSettings;
-  // Backfill wordBank for existing users who don't have it yet
   const settings = raw as DrillSettings;
   if (!settings.wordBank) {
     return { ...settings, wordBank: "spbcn-middle" };
@@ -103,22 +122,40 @@ export function loadSettings(): DrillSettings {
 }
 
 export function loadProgress(): ProgressMap {
-  const raw = readJson<unknown>(PROGRESS_KEY, {});
+  const raw = readJson<unknown>(progressKey(), {});
   return isValidProgressMap(raw) ? raw : {};
 }
 
 export function saveSettings(settings: DrillSettings) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  if (!canUseStorage()) return;
+  window.localStorage.setItem(settingsKey(), JSON.stringify(settings));
 }
 
 export function saveProgress(progress: ProgressMap) {
-  if (!canUseStorage()) {
-    return;
+  if (!canUseStorage()) return;
+  window.localStorage.setItem(progressKey(), JSON.stringify(progress));
+}
+
+/** Migrate legacy (non-namespaced) localStorage to the current user's namespace. */
+export function migrateLocalStorageToUser(): boolean {
+  if (!canUseStorage() || !activeUserId) return false;
+
+  const legacySettings = window.localStorage.getItem(LEGACY_SETTINGS_KEY);
+  const legacyProgress = window.localStorage.getItem(LEGACY_PROGRESS_KEY);
+
+  if (!legacySettings && !legacyProgress) return false;
+
+  // Copy to user-namespaced keys
+  if (legacySettings) {
+    window.localStorage.setItem(settingsKey(), legacySettings);
+  }
+  if (legacyProgress) {
+    window.localStorage.setItem(progressKey(), legacyProgress);
   }
 
-  window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
+  // Remove legacy keys
+  window.localStorage.removeItem(LEGACY_SETTINGS_KEY);
+  window.localStorage.removeItem(LEGACY_PROGRESS_KEY);
+
+  return true;
 }
