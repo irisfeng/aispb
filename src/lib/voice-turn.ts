@@ -456,6 +456,16 @@ async function routeTranscriptWithOpenAi(
     localInterpretation.intent === "spelling" &&
     spellingCheck.usedWholeWordFallback;
 
+  console.log("[voice-turn] OpenAI route input:", JSON.stringify({
+    transcript,
+    localIntent: localInterpretation.intent,
+    localLetters: localInterpretation.normalizedLetters,
+    localConfidence: localInterpretation.confidence,
+    isWholeWordSpelling,
+    usedWholeWordFallback: spellingCheck.usedWholeWordFallback,
+    spellingCandidate: spellingCheck.candidate,
+  }));
+
   const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: {
@@ -531,11 +541,19 @@ async function routeTranscriptWithOpenAi(
   const normalizedLetters = sanitizeLetters(parsed.normalized_letters || "");
   const nextIntent = normalizeModelIntent(parsed.intent || "clarify");
 
+  console.log("[voice-turn] LLM response:", JSON.stringify({
+    llmIntent: nextIntent,
+    llmLetters: normalizedLetters,
+    llmConfidence: parsed.confidence,
+    rawContent: content,
+  }));
+
   if (
     nextIntent === "spelling" &&
     !normalizedLetters &&
     localInterpretation.normalizedLetters
   ) {
+    console.log("[voice-turn] GUARD: LLM spelling but no letters, using local");
     return {
       ...localInterpretation,
       provider: "OpenAI voice router",
@@ -552,6 +570,7 @@ async function routeTranscriptWithOpenAi(
     localInterpretation.intent !== "spelling" &&
     localInterpretation.intent !== "clarify"
   ) {
+    console.log("[voice-turn] GUARD: LLM spelling but local has specific intent, using local");
     return {
       ...localInterpretation,
       provider: "OpenAI voice router",
@@ -569,6 +588,7 @@ async function routeTranscriptWithOpenAi(
     localInterpretation.confidence !== "low" &&
     !isWholeWordSpelling
   ) {
+    console.log("[voice-turn] GUARD: LLM clarify but local confident, using local");
     return {
       ...localInterpretation,
       provider: "OpenAI voice router",
@@ -577,7 +597,7 @@ async function routeTranscriptWithOpenAi(
     };
   }
 
-  return {
+  const finalResult = {
     confidence: parsed.confidence,
     intent: nextIntent,
     normalizedLetters,
@@ -585,6 +605,8 @@ async function routeTranscriptWithOpenAi(
     transcript,
     usedCloud: true,
   };
+  console.log("[voice-turn] FINAL:", JSON.stringify({ intent: finalResult.intent, letters: finalResult.normalizedLetters }));
+  return finalResult;
 }
 
 export async function interpretVoiceTurnFromTranscript(
