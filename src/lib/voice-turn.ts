@@ -360,12 +360,14 @@ async function routeTranscriptWithVolcDoubao(
     };
   }
 
-  // Guard: if the LLM says "spelling" but the local deterministic parser
-  // disagrees, trust local.  This prevents the LLM from accepting a
-  // whole-word repetition as a valid spelling attempt.
+  // Guard: if the LLM says "spelling" but local has a *specific* non-spelling
+  // intent (e.g. definition, repeat), trust local.  When local says "clarify"
+  // (uncertain), let the LLM verdict through — single letters and short
+  // sequences often land in "clarify" locally but the LLM handles them fine.
   if (
     nextIntent === "spelling" &&
-    localInterpretation.intent !== "spelling"
+    localInterpretation.intent !== "spelling" &&
+    localInterpretation.intent !== "clarify"
   ) {
     return {
       ...localInterpretation,
@@ -513,12 +515,13 @@ async function routeTranscriptWithOpenAi(
     };
   }
 
-  // Guard: if the LLM says "spelling" but the local deterministic parser
-  // disagrees, trust local.  This prevents the LLM from accepting a
-  // whole-word repetition as a valid spelling attempt.
+  // Guard: if the LLM says "spelling" but local has a *specific* non-spelling
+  // intent (e.g. definition, repeat), trust local.  When local says "clarify"
+  // (uncertain), let the LLM verdict through.
   if (
     nextIntent === "spelling" &&
-    localInterpretation.intent !== "spelling"
+    localInterpretation.intent !== "spelling" &&
+    localInterpretation.intent !== "clarify"
   ) {
     return {
       ...localInterpretation,
