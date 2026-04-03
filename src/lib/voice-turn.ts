@@ -46,6 +46,26 @@ const supportedVoiceTurnIntents = [
 
 type SupportedVoiceTurnIntent = (typeof supportedVoiceTurnIntents)[number];
 
+const LLM_ROUTER_SYSTEM_PROMPT = [
+  "You route utterances for a children's English spelling bee practice app.",
+  "The user is trying to spell a target word letter by letter. The transcript comes from ASR and may be noisy.",
+  "",
+  "PRONOUNCER INTENTS (only when user explicitly asks for help):",
+  "repeat, definition, sentence, origin, part-of-speech, all-info — choose these ONLY when the transcript is a clear English request like 'can you repeat that', 'definition please', 'use it in a sentence', etc.",
+  "",
+  "OTHER INTENTS:",
+  "spelling — the transcript is individual letters (e.g. 'r e c', 'b a t', 'alpha bravo'). ASR may merge letters into a short nonsense syllable (e.g. 'res' from 'R E S') — if the transcript is a short fragment ≤2 syllables that is NOT a common English request, prefer spelling and extract the letters.",
+  "start-over — user wants to restart spelling.",
+  "clarify — use when uncertain OR when the transcript is just the target word spoken aloud (not a help request, not letter spelling).",
+  "disallowed — user asks something outside the game rules.",
+  "",
+  "CRITICAL RULES:",
+  "A single whole English word by itself (like 'receptacle', 'exemplary') is NOT a pronouncer request — the user just said the word aloud. Return clarify.",
+  "Only choose a pronouncer intent when there is a clear request phrase (verb or question).",
+  "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
+  "Respond with a JSON object containing: confidence, intent, normalized_letters.",
+].join("\n");
+
 type VoiceTurnConfidence = "low" | "medium" | "high";
 
 interface OpenAiRouterResult {
@@ -321,18 +341,7 @@ async function routeTranscriptWithVolcDoubao(
       messages: [
         {
           role: "system",
-          content: [
-            "You route utterances for a children's English spelling bee practice app.",
-            "Allowed pronouncer intents: repeat, definition, sentence, origin, part-of-speech, all-info.",
-            "Other supported intents: ready-to-spell, start-over, disallowed, spelling, clarify.",
-            "Classify natural English requests generously.",
-            "Only choose spelling when the utterance is mainly letters, NATO alphabet, or letter instructions like double a.",
-            "A single whole English word (like 'cat' or 'advisable') is NOT spelling — it means the user just said the word aloud.",
-            "Never guess missing letters from meaning or pronunciation.",
-            "If uncertain between a clue request and spelling, choose clarify.",
-            "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
-            "Respond with a JSON object containing: confidence, intent, normalized_letters.",
-          ].join(" "),
+          content: LLM_ROUTER_SYSTEM_PROMPT,
         },
         {
           role: "user",
@@ -478,18 +487,7 @@ async function routeTranscriptWithOpenAi(
       messages: [
         {
           role: "system",
-          content: [
-            "You route utterances for a children's English spelling bee practice app.",
-            "Allowed pronouncer intents: repeat, definition, sentence, origin, part-of-speech, all-info.",
-            "Other supported intents: ready-to-spell, start-over, disallowed, spelling, clarify.",
-            "Classify natural English requests generously.",
-            "Only choose spelling when the utterance is mainly letters, NATO alphabet, or letter instructions like double a.",
-            "A single whole English word (like 'cat' or 'advisable') is NOT spelling — it means the user just said the word aloud.",
-            "Never guess missing letters from meaning or pronunciation.",
-            "If uncertain between a clue request and spelling, choose clarify.",
-            "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
-            "Respond with a JSON object containing: confidence, intent, normalized_letters.",
-          ].join(" "),
+          content: LLM_ROUTER_SYSTEM_PROMPT,
         },
         {
           role: "user",
