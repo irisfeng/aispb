@@ -331,6 +331,7 @@ async function routeTranscriptWithVolcDoubao(
             "Never guess missing letters from meaning or pronunciation.",
             "If uncertain between a clue request and spelling, choose clarify.",
             "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
+            "Respond with a JSON object containing: confidence, intent, normalized_letters.",
           ].join(" "),
         },
         {
@@ -487,6 +488,7 @@ async function routeTranscriptWithOpenAi(
             "Never guess missing letters from meaning or pronunciation.",
             "If uncertain between a clue request and spelling, choose clarify.",
             "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
+            "Respond with a JSON object containing: confidence, intent, normalized_letters.",
           ].join(" "),
         },
         {
