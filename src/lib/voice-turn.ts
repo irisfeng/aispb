@@ -346,16 +346,13 @@ async function routeTranscriptWithVolcDoubao(
         {
           role: "user",
           content: JSON.stringify({
-            deterministic_candidate: isWholeWordSpelling
-              ? ""
-              : localInterpretation.normalizedLetters,
-            deterministic_confidence: isWholeWordSpelling
-              ? "low"
-              : localInterpretation.confidence,
-            deterministic_intent: isWholeWordSpelling
-              ? "clarify"
-              : localInterpretation.intent,
+            deterministic_candidate: localInterpretation.normalizedLetters,
+            deterministic_confidence: localInterpretation.confidence,
+            deterministic_intent: localInterpretation.intent,
             transcript,
+            ...(isWholeWordSpelling
+              ? { asr_note: "ASR returned a single word — could be the user reading the word aloud OR individual letters that ASR merged. Judge from context." }
+              : {}),
           }),
         },
       ],
@@ -492,16 +489,13 @@ async function routeTranscriptWithOpenAi(
         {
           role: "user",
           content: JSON.stringify({
-            deterministic_candidate: isWholeWordSpelling
-              ? ""
-              : localInterpretation.normalizedLetters,
-            deterministic_confidence: isWholeWordSpelling
-              ? "low"
-              : localInterpretation.confidence,
-            deterministic_intent: isWholeWordSpelling
-              ? "clarify"
-              : localInterpretation.intent,
+            deterministic_candidate: localInterpretation.normalizedLetters,
+            deterministic_confidence: localInterpretation.confidence,
+            deterministic_intent: localInterpretation.intent,
             transcript,
+            ...(isWholeWordSpelling
+              ? { asr_note: "ASR returned a single word — could be the user reading the word aloud OR individual letters that ASR merged. Judge from context." }
+              : {}),
           }),
         },
       ],
