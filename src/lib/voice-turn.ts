@@ -322,14 +322,6 @@ async function routeTranscriptWithVolcDoubao(
 
   const localInterpretation = fallbackInterpretTranscript(transcript);
 
-  // Detect when local "spelling" came from whole-word fallback
-  const spellingCheck = normalizeSpokenSpellingAttempt(transcript, {
-    allowWholeWordFallback: true,
-  });
-  const isWholeWordSpelling =
-    localInterpretation.intent === "spelling" &&
-    spellingCheck.usedWholeWordFallback;
-
   const response = await fetch(`${VOLC_LLM_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -350,9 +342,6 @@ async function routeTranscriptWithVolcDoubao(
             deterministic_confidence: localInterpretation.confidence,
             deterministic_intent: localInterpretation.intent,
             transcript,
-            ...(isWholeWordSpelling
-              ? { asr_note: "ASR returned a single word — could be the user reading the word aloud OR individual letters that ASR merged. Judge from context." }
-              : {}),
           }),
         },
       ],
@@ -421,8 +410,7 @@ async function routeTranscriptWithVolcDoubao(
   if (
     nextIntent === "clarify" &&
     localInterpretation.intent !== "clarify" &&
-    localInterpretation.confidence !== "low" &&
-    !isWholeWordSpelling
+    localInterpretation.confidence !== "low"
   ) {
     return {
       ...localInterpretation,
@@ -453,26 +441,6 @@ async function routeTranscriptWithOpenAi(
 
   const localInterpretation = fallbackInterpretTranscript(transcript);
 
-  // Detect when local "spelling" verdict came from whole-word fallback —
-  // the transcript looks like a single word (e.g. "advisable"), not
-  // individual letters.  Don't bias the LLM with a wrong local verdict.
-  const spellingCheck = normalizeSpokenSpellingAttempt(transcript, {
-    allowWholeWordFallback: true,
-  });
-  const isWholeWordSpelling =
-    localInterpretation.intent === "spelling" &&
-    spellingCheck.usedWholeWordFallback;
-
-  console.log("[voice-turn] OpenAI route input:", JSON.stringify({
-    transcript,
-    localIntent: localInterpretation.intent,
-    localLetters: localInterpretation.normalizedLetters,
-    localConfidence: localInterpretation.confidence,
-    isWholeWordSpelling,
-    usedWholeWordFallback: spellingCheck.usedWholeWordFallback,
-    spellingCandidate: spellingCheck.candidate,
-  }));
-
   const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: {
@@ -493,9 +461,6 @@ async function routeTranscriptWithOpenAi(
             deterministic_confidence: localInterpretation.confidence,
             deterministic_intent: localInterpretation.intent,
             transcript,
-            ...(isWholeWordSpelling
-              ? { asr_note: "ASR returned a single word — could be the user reading the word aloud OR individual letters that ASR merged. Judge from context." }
-              : {}),
           }),
         },
       ],
@@ -521,7 +486,7 @@ async function routeTranscriptWithOpenAi(
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content) {
-    return fallbackInterpretTranscript(transcript);
+    return localInterpretation;
   }
 
   let parsed: OpenAiRouterResult | null = null;
@@ -529,25 +494,17 @@ async function routeTranscriptWithOpenAi(
   try {
     parsed = JSON.parse(content) as OpenAiRouterResult;
   } catch {
-    return fallbackInterpretTranscript(transcript);
+    return localInterpretation;
   }
 
   const normalizedLetters = sanitizeLetters(parsed.normalized_letters || "");
   const nextIntent = normalizeModelIntent(parsed.intent || "clarify");
-
-  console.log("[voice-turn] LLM response:", JSON.stringify({
-    llmIntent: nextIntent,
-    llmLetters: normalizedLetters,
-    llmConfidence: parsed.confidence,
-    rawContent: content,
-  }));
 
   if (
     nextIntent === "spelling" &&
     !normalizedLetters &&
     localInterpretation.normalizedLetters
   ) {
-    console.log("[voice-turn] GUARD: LLM spelling but no letters, using local");
     return {
       ...localInterpretation,
       provider: "OpenAI voice router",
@@ -556,33 +513,11 @@ async function routeTranscriptWithOpenAi(
     };
   }
 
-  // Guard: if the LLM says "spelling" but local has a *specific* non-spelling
-  // intent (e.g. definition, repeat), trust local.  When local says "clarify"
-  // (uncertain), let the LLM verdict through.
-  if (
-    nextIntent === "spelling" &&
-    localInterpretation.intent !== "spelling" &&
-    localInterpretation.intent !== "clarify"
-  ) {
-    console.log("[voice-turn] GUARD: LLM spelling but local has specific intent, using local");
-    return {
-      ...localInterpretation,
-      provider: "OpenAI voice router",
-      transcript,
-      usedCloud: true,
-    };
-  }
-
-  // When LLM says "clarify" but local has a confident non-clarify verdict,
-  // trust local — UNLESS local's verdict was from whole-word fallback
-  // (in which case the LLM's "clarify" is more trustworthy).
   if (
     nextIntent === "clarify" &&
     localInterpretation.intent !== "clarify" &&
-    localInterpretation.confidence !== "low" &&
-    !isWholeWordSpelling
+    localInterpretation.confidence !== "low"
   ) {
-    console.log("[voice-turn] GUARD: LLM clarify but local confident, using local");
     return {
       ...localInterpretation,
       provider: "OpenAI voice router",
@@ -591,7 +526,7 @@ async function routeTranscriptWithOpenAi(
     };
   }
 
-  const finalResult = {
+  return {
     confidence: parsed.confidence,
     intent: nextIntent,
     normalizedLetters,
@@ -599,8 +534,6 @@ async function routeTranscriptWithOpenAi(
     transcript,
     usedCloud: true,
   };
-  console.log("[voice-turn] FINAL:", JSON.stringify({ intent: finalResult.intent, letters: finalResult.normalizedLetters }));
-  return finalResult;
 }
 
 export async function interpretVoiceTurnFromTranscript(
