@@ -8,9 +8,27 @@ import { normalizeSpokenSpellingAttempt } from "@/lib/spoken-spelling";
 import type { DrillPromptKind } from "@/lib/types";
 
 const OPENAI_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_ROUTER_MODEL = "gpt-4o-mini";
+const DEFAULT_ROUTER_MODEL = "gpt-4o-mini";
 
 const VOLC_LLM_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+
+/**
+ * OpenAI-compatible LLM router config.  Supports DeepSeek, Moonshot, etc.
+ *
+ *   OPENAI_API_KEY      — API key (required)
+ *   OPENAI_BASE_URL     — base URL (default: https://api.openai.com/v1)
+ *   OPENAI_ROUTER_MODEL — model name (default: gpt-4o-mini)
+ */
+function getOpenAiBaseUrl(): string {
+  return (
+    process.env.OPENAI_BASE_URL?.trim().replace(/\/+$/, "") ||
+    "https://api.openai.com/v1"
+  );
+}
+
+function getOpenAiRouterModel(): string {
+  return process.env.OPENAI_ROUTER_MODEL?.trim() || DEFAULT_ROUTER_MODEL;
+}
 
 const supportedVoiceTurnIntents = [
   "repeat",
@@ -118,15 +136,16 @@ export function getVoiceTurnProviderStatus(): VoiceTurnStatusPayload {
   const transcriptionProvider = hasIflytekTranscription
     ? "iFlytek streaming ASR"
     : OPENAI_TRANSCRIBE_MODEL;
+  const hasOpenAiRouter = Boolean(getOpenAiApiKey());
   const routerProvider = hasVolcLlmConfig()
     ? "Volcengine Doubao"
-    : hasOpenAiTranscription
-      ? "OpenAI"
+    : hasOpenAiRouter
+      ? "OpenAI-compatible"
       : "Local";
   const routerModel = hasVolcLlmConfig()
     ? getVolcLlmEndpointId()
-    : hasOpenAiTranscription
-      ? OPENAI_ROUTER_MODEL
+    : hasOpenAiRouter
+      ? getOpenAiRouterModel()
       : null;
 
   return {
@@ -410,14 +429,14 @@ async function routeTranscriptWithOpenAi(
   }
 
   const localInterpretation = fallbackInterpretTranscript(transcript);
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: OPENAI_ROUTER_MODEL,
+      model: getOpenAiRouterModel(),
       messages: [
         {
           role: "system",
@@ -442,31 +461,7 @@ async function routeTranscriptWithOpenAi(
           }),
         },
       ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "voice_turn_router",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              confidence: {
-                type: "string",
-                enum: ["low", "medium", "high"],
-              },
-              intent: {
-                type: "string",
-                enum: [...supportedVoiceTurnIntents],
-              },
-              normalized_letters: {
-                type: "string",
-              },
-            },
-            required: ["confidence", "intent", "normalized_letters"],
-          },
-        },
-      },
+      response_format: { type: "json_object" },
     }),
   });
 
