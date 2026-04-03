@@ -60,7 +60,7 @@ const LLM_ROUTER_SYSTEM_PROMPT = [
   "disallowed — user asks something outside the game rules.",
   "",
   "CRITICAL RULES:",
-  "A single whole English word by itself (like 'receptacle', 'exemplary') is NOT a pronouncer request — the user just said the word aloud. Return clarify.",
+  "If the transcript is a single English word with no request verb or question, the user just said the word aloud — return clarify, not a pronouncer intent.",
   "Only choose a pronouncer intent when there is a clear request phrase (verb or question).",
   "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
   "Respond with a JSON object containing: confidence, intent, normalized_letters.",
