@@ -360,6 +360,21 @@ async function routeTranscriptWithVolcDoubao(
     };
   }
 
+  // Guard: if the LLM says "spelling" but the local deterministic parser
+  // disagrees, trust local.  This prevents the LLM from accepting a
+  // whole-word repetition as a valid spelling attempt.
+  if (
+    nextIntent === "spelling" &&
+    localInterpretation.intent !== "spelling"
+  ) {
+    return {
+      ...localInterpretation,
+      provider: "Volcengine Doubao",
+      transcript,
+      usedCloud: true,
+    };
+  }
+
   if (
     nextIntent === "clarify" &&
     localInterpretation.intent !== "clarify" &&
@@ -489,6 +504,21 @@ async function routeTranscriptWithOpenAi(
     nextIntent === "spelling" &&
     !normalizedLetters &&
     localInterpretation.normalizedLetters
+  ) {
+    return {
+      ...localInterpretation,
+      provider: "OpenAI voice router",
+      transcript,
+      usedCloud: true,
+    };
+  }
+
+  // Guard: if the LLM says "spelling" but the local deterministic parser
+  // disagrees, trust local.  This prevents the LLM from accepting a
+  // whole-word repetition as a valid spelling attempt.
+  if (
+    nextIntent === "spelling" &&
+    localInterpretation.intent !== "spelling"
   ) {
     return {
       ...localInterpretation,
