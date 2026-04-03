@@ -302,6 +302,14 @@ async function routeTranscriptWithVolcDoubao(
 
   const localInterpretation = fallbackInterpretTranscript(transcript);
 
+  // Detect when local "spelling" came from whole-word fallback
+  const spellingCheck = normalizeSpokenSpellingAttempt(transcript, {
+    allowWholeWordFallback: true,
+  });
+  const isWholeWordSpelling =
+    localInterpretation.intent === "spelling" &&
+    spellingCheck.usedWholeWordFallback;
+
   const response = await fetch(`${VOLC_LLM_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -319,6 +327,7 @@ async function routeTranscriptWithVolcDoubao(
             "Other supported intents: ready-to-spell, start-over, disallowed, spelling, clarify.",
             "Classify natural English requests generously.",
             "Only choose spelling when the utterance is mainly letters, NATO alphabet, or letter instructions like double a.",
+            "A single whole English word (like 'cat' or 'advisable') is NOT spelling — it means the user just said the word aloud.",
             "Never guess missing letters from meaning or pronunciation.",
             "If uncertain between a clue request and spelling, choose clarify.",
             "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
@@ -327,9 +336,15 @@ async function routeTranscriptWithVolcDoubao(
         {
           role: "user",
           content: JSON.stringify({
-            deterministic_candidate: localInterpretation.normalizedLetters,
-            deterministic_confidence: localInterpretation.confidence,
-            deterministic_intent: localInterpretation.intent,
+            deterministic_candidate: isWholeWordSpelling
+              ? ""
+              : localInterpretation.normalizedLetters,
+            deterministic_confidence: isWholeWordSpelling
+              ? "low"
+              : localInterpretation.confidence,
+            deterministic_intent: isWholeWordSpelling
+              ? "clarify"
+              : localInterpretation.intent,
             transcript,
           }),
         },
@@ -399,7 +414,8 @@ async function routeTranscriptWithVolcDoubao(
   if (
     nextIntent === "clarify" &&
     localInterpretation.intent !== "clarify" &&
-    localInterpretation.confidence !== "low"
+    localInterpretation.confidence !== "low" &&
+    !isWholeWordSpelling
   ) {
     return {
       ...localInterpretation,
@@ -429,6 +445,17 @@ async function routeTranscriptWithOpenAi(
   }
 
   const localInterpretation = fallbackInterpretTranscript(transcript);
+
+  // Detect when local "spelling" verdict came from whole-word fallback —
+  // the transcript looks like a single word (e.g. "advisable"), not
+  // individual letters.  Don't bias the LLM with a wrong local verdict.
+  const spellingCheck = normalizeSpokenSpellingAttempt(transcript, {
+    allowWholeWordFallback: true,
+  });
+  const isWholeWordSpelling =
+    localInterpretation.intent === "spelling" &&
+    spellingCheck.usedWholeWordFallback;
+
   const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: {
@@ -446,6 +473,7 @@ async function routeTranscriptWithOpenAi(
             "Other supported intents: ready-to-spell, start-over, disallowed, spelling, clarify.",
             "Classify natural English requests generously.",
             "Only choose spelling when the utterance is mainly letters, NATO alphabet, or letter instructions like double a.",
+            "A single whole English word (like 'cat' or 'advisable') is NOT spelling — it means the user just said the word aloud.",
             "Never guess missing letters from meaning or pronunciation.",
             "If uncertain between a clue request and spelling, choose clarify.",
             "normalized_letters must contain lowercase a-z only and stay empty unless intent is spelling.",
@@ -454,9 +482,15 @@ async function routeTranscriptWithOpenAi(
         {
           role: "user",
           content: JSON.stringify({
-            deterministic_candidate: localInterpretation.normalizedLetters,
-            deterministic_confidence: localInterpretation.confidence,
-            deterministic_intent: localInterpretation.intent,
+            deterministic_candidate: isWholeWordSpelling
+              ? ""
+              : localInterpretation.normalizedLetters,
+            deterministic_confidence: isWholeWordSpelling
+              ? "low"
+              : localInterpretation.confidence,
+            deterministic_intent: isWholeWordSpelling
+              ? "clarify"
+              : localInterpretation.intent,
             transcript,
           }),
         },
@@ -526,10 +560,14 @@ async function routeTranscriptWithOpenAi(
     };
   }
 
+  // When LLM says "clarify" but local has a confident non-clarify verdict,
+  // trust local — UNLESS local's verdict was from whole-word fallback
+  // (in which case the LLM's "clarify" is more trustworthy).
   if (
     nextIntent === "clarify" &&
     localInterpretation.intent !== "clarify" &&
-    localInterpretation.confidence !== "low"
+    localInterpretation.confidence !== "low" &&
+    !isWholeWordSpelling
   ) {
     return {
       ...localInterpretation,
