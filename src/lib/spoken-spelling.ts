@@ -292,7 +292,6 @@ export function normalizeSpokenSpellingAttempt(
 
   const looksLikeSpelling =
     command === "start-over" ||
-    usedWholeWordFallback ||
     (Boolean(candidate) && recognizedTokenCount >= 2 && unknownTokenCount === 0) ||
     (Boolean(candidate) &&
       candidate.length >= 2 &&
