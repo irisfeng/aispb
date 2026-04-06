@@ -13,7 +13,7 @@ export async function loadSettingsFromSupabase(
   const supabase = getClient();
   const { data, error } = await supabase
     .from("user_settings")
-    .select("daily_goal, round_duration_seconds, pronouncer_enabled, word_bank")
+    .select("daily_goal, round_duration_seconds, pronouncer_enabled, word_bank, etymology_languages")
     .eq("user_id", userId)
     .single();
 
@@ -28,6 +28,7 @@ export async function loadSettingsFromSupabase(
     roundDurationSeconds: data.round_duration_seconds,
     pronouncerEnabled: data.pronouncer_enabled,
     wordBank: data.word_bank as DrillSettings["wordBank"],
+    etymologyLanguages: data.etymology_languages ?? undefined,
   };
 }
 
@@ -42,6 +43,7 @@ export async function saveSettingsToSupabase(
     round_duration_seconds: settings.roundDurationSeconds,
     pronouncer_enabled: settings.pronouncerEnabled,
     word_bank: settings.wordBank,
+    etymology_languages: settings.etymologyLanguages ?? null,
     updated_at: new Date().toISOString(),
   });
   if (error) console.error("[supabase-sync] saveSettings error:", error.message);

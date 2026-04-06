@@ -59,7 +59,7 @@ function readJson<T>(key: string, fallback: T): T {
 
 const VALID_DAILY_GOALS = new Set([20, 30, 50, 80, 100]);
 const VALID_ROUND_DURATIONS = new Set([60, 90]);
-const VALID_WORD_BANKS = new Set(["spbcn-middle", "spbcn-high"]);
+const VALID_WORD_BANKS = new Set(["spbcn-middle", "spbcn-high", "etymology"]);
 
 function isValidDrillSettings(value: unknown): value is DrillSettings {
   if (typeof value !== "object" || value === null) {
@@ -75,7 +75,10 @@ function isValidDrillSettings(value: unknown): value is DrillSettings {
     VALID_ROUND_DURATIONS.has(obj.roundDurationSeconds) &&
     typeof obj.pronouncerEnabled === "boolean" &&
     (obj.wordBank === undefined ||
-      (typeof obj.wordBank === "string" && VALID_WORD_BANKS.has(obj.wordBank)))
+      (typeof obj.wordBank === "string" && VALID_WORD_BANKS.has(obj.wordBank))) &&
+    (obj.etymologyLanguages === undefined ||
+      (Array.isArray(obj.etymologyLanguages) &&
+        obj.etymologyLanguages.every((l: unknown) => typeof l === "string")))
   );
 }
 

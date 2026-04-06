@@ -28,7 +28,8 @@ export interface DrillSettings {
   dailyGoal: number;
   roundDurationSeconds: number;
   pronouncerEnabled: boolean;
-  wordBank: "spbcn-middle" | "spbcn-high";
+  wordBank: "spbcn-middle" | "spbcn-high" | "etymology";
+  etymologyLanguages?: string[];
 }
 
 export interface PlannedDrillWord extends DrillWord {
