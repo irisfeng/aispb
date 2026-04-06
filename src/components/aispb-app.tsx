@@ -74,6 +74,7 @@ import type {
 } from "@/lib/types";
 import { wordBank } from "@/lib/word-bank";
 import { wordBankHigh } from "@/lib/word-bank-high";
+import { wordBankEtymology, etymologyLanguages } from "@/lib/word-bank-etymology";
 
 type FeedEntryTone = "system" | "hint" | "success" | "danger";
 type SpeechCaptureState =
@@ -342,7 +343,24 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [browseKnown, setBrowseKnown] = useState(0);
   const [browseUnknown, setBrowseUnknown] = useState(0);
 
-  const activeWordBank = settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
+  const activeWordBank = useMemo(() => {
+    if (settings.wordBank === "etymology") {
+      const langs = settings.etymologyLanguages;
+      if (!langs || langs.length === 0) return wordBankEtymology;
+      const langSet = new Set(langs);
+      const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
+      return filtered.length > 0 ? filtered : wordBankEtymology;
+    }
+    return settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
+  }, [settings.wordBank, settings.etymologyLanguages]);
+
+  const etymologyLanguageCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const lang of etymologyLanguages) {
+      counts[lang] = wordBankEtymology.filter((w) => w.category === lang).length;
+    }
+    return counts;
+  }, []);
 
   const todayKey = getTodayKey();
   const previewPlan = useMemo(
@@ -2385,7 +2403,75 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   >
                     High ({wordBankHigh.length})
                   </button>
+                  <button
+                    className={`setting-chip ${settings.wordBank === "etymology" ? "setting-chip-active" : ""}`}
+                    onClick={() => {
+                      updateSettings({ wordBank: "etymology" });
+                      setActivePlan(null);
+                    }}
+                    type="button"
+                  >
+                    Etymology ({wordBankEtymology.length})
+                  </button>
                 </div>
+                {settings.wordBank === "etymology" && (
+                  <div className="mt-3">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                        Language of origin
+                      </p>
+                      <button
+                        className="text-xs text-[color:var(--muted)] underline"
+                        onClick={() => {
+                          updateSettings({ etymologyLanguages: [] });
+                          setActivePlan(null);
+                        }}
+                        type="button"
+                      >
+                        All
+                      </button>
+                      <button
+                        className="text-xs text-[color:var(--muted)] underline"
+                        onClick={() =>
+                          updateSettings({ etymologyLanguages: [] })
+                        }
+                        type="button"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {etymologyLanguages.map((lang) => {
+                        const selected =
+                          !settings.etymologyLanguages ||
+                          settings.etymologyLanguages.length === 0 ||
+                          settings.etymologyLanguages.includes(lang);
+                        return (
+                          <button
+                            key={lang}
+                            className={`setting-chip ${selected ? "setting-chip-active" : ""}`}
+                            onClick={() => {
+                              const current =
+                                settings.etymologyLanguages &&
+                                settings.etymologyLanguages.length > 0
+                                  ? settings.etymologyLanguages
+                                  : [...etymologyLanguages];
+                              const next = selected
+                                ? current.filter((l) => l !== lang)
+                                : [...current, lang];
+                              if (next.length === 0) return;
+                              updateSettings({ etymologyLanguages: next });
+                              setActivePlan(null);
+                            }}
+                            type="button"
+                          >
+                            {lang} ({etymologyLanguageCounts[lang]})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-4">

@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 
 import { lookupMerriamWebsterWord } from "@/lib/merriam-webster";
 import { wordBank } from "@/lib/word-bank";
+import { wordBankHigh } from "@/lib/word-bank-high";
+import { wordBankEtymology } from "@/lib/word-bank-etymology";
+
+const allBanks = [...wordBank, ...wordBankHigh, ...wordBankEtymology];
 
 function findLocalWord(query: string) {
   const normalizedQuery = query.trim().toLowerCase();
 
   return (
-    wordBank.find((word) => word.word.toLowerCase() === normalizedQuery) ??
-    wordBank.find((word) => word.id.toLowerCase() === normalizedQuery) ??
+    allBanks.find((word) => word.word.toLowerCase() === normalizedQuery) ??
+    allBanks.find((word) => word.id.toLowerCase() === normalizedQuery) ??
     null
   );
 }
