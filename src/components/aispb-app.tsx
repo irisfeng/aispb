@@ -348,7 +348,8 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
       const langs = settings.etymologyLanguages;
       if (!langs || langs.length === 0) return wordBankEtymology;
       const langSet = new Set(langs);
-      return wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
+      const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
+      return filtered.length > 0 ? filtered : wordBankEtymology;
     }
     return settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
   }, [settings.wordBank, settings.etymologyLanguages]);
@@ -2421,11 +2422,10 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                       </p>
                       <button
                         className="text-xs text-[color:var(--muted)] underline"
-                        onClick={() =>
-                          updateSettings({
-                            etymologyLanguages: [...etymologyLanguages],
-                          })
-                        }
+                        onClick={() => {
+                          updateSettings({ etymologyLanguages: [] });
+                          setActivePlan(null);
+                        }}
                         type="button"
                       >
                         All
@@ -2459,6 +2459,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                               const next = selected
                                 ? current.filter((l) => l !== lang)
                                 : [...current, lang];
+                              if (next.length === 0) return;
                               updateSettings({ etymologyLanguages: next });
                               setActivePlan(null);
                             }}
