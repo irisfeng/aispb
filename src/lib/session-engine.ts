@@ -195,7 +195,9 @@ export function applyDrillResult(input: {
   wordId: string;
   result: Exclude<SubmissionState, "idle">;
   todayKey: string;
+  isPractice?: boolean;
 }): ProgressMap {
+  if (input.isPractice) return input.progress;
   const { progress, result, todayKey, wordId } = input;
   const current = progress[wordId] ?? createEmptyProgress(wordId);
   const next: WordProgressRecord = {
