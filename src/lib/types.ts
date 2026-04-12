@@ -28,7 +28,7 @@ export interface DrillSettings {
   dailyGoal: number;
   roundDurationSeconds: number;
   pronouncerEnabled: boolean;
-  wordBank: "spbcn-middle" | "spbcn-high" | "etymology";
+  wordBanks: string[];
   etymologyLanguages?: string[];
 }
 
@@ -46,6 +46,19 @@ export interface DrillPlan {
     freshCount: number;
   };
   isReviewDrill?: boolean;
+  isPractice?: boolean;
+}
+
+export interface QueuedTask {
+  wordBank: string;
+  wordCount: number;
+}
+
+export interface TaskResult {
+  wordBank: string;
+  total: number;
+  correct: number;
+  elapsed: number;
 }
 
 export interface WordProgressRecord {
