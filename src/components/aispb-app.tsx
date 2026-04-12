@@ -344,15 +344,26 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [browseUnknown, setBrowseUnknown] = useState(0);
 
   const activeWordBank = useMemo(() => {
-    if (settings.wordBank === "etymology") {
-      const langs = settings.etymologyLanguages;
-      if (!langs || langs.length === 0) return wordBankEtymology;
-      const langSet = new Set(langs);
-      const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
-      return filtered.length > 0 ? filtered : wordBankEtymology;
+    const banks = settings.wordBanks;
+    const result: DrillWord[] = [];
+    for (const bank of banks) {
+      if (bank === "spbcn-middle") {
+        result.push(...wordBank);
+      } else if (bank === "spbcn-high") {
+        result.push(...wordBankHigh);
+      } else if (bank === "etymology") {
+        const langs = settings.etymologyLanguages;
+        if (langs && langs.length > 0) {
+          const langSet = new Set(langs);
+          const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
+          result.push(...(filtered.length > 0 ? filtered : wordBankEtymology));
+        } else {
+          result.push(...wordBankEtymology);
+        }
+      }
     }
-    return settings.wordBank === "spbcn-high" ? wordBankHigh : wordBank;
-  }, [settings.wordBank, settings.etymologyLanguages]);
+    return result;
+  }, [settings.wordBanks, settings.etymologyLanguages]);
 
   const etymologyLanguageCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1936,7 +1947,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     if (browseDone || !currentBrowseWord) {
       // Summary screen
       return (
-        <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+        <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
           <section className="panel px-5 py-6 sm:px-7 sm:py-7">
             <p className="eyebrow">Quick Browse Complete</p>
             <h1 className="mt-3 font-[family:var(--font-display)] text-3xl text-[color:var(--foreground)]">
@@ -1965,7 +1976,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     }
 
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+      <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
         <section className="panel px-5 py-6 sm:px-7 sm:py-7">
           <div className="flex items-center justify-between">
             <p className="eyebrow">Quick Browse</p>
@@ -2008,7 +2019,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
 
   if (sessionStarted && !sessionComplete && currentWord) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+      <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
         <section className="panel relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7">
           <div className="absolute inset-x-0 top-0 h-px bg-white/70" />
           <div className="flex items-start justify-between gap-4">
@@ -2309,7 +2320,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-8">
+    <main className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-8">
       <section className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <div className="panel relative overflow-hidden px-5 py-6 sm:px-7 sm:py-8">
           <div className="absolute inset-x-0 top-0 h-px bg-white/70" />
@@ -2383,38 +2394,38 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   Word bank
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    className={`setting-chip ${settings.wordBank === "spbcn-middle" ? "setting-chip-active" : ""}`}
-                    onClick={() => {
-                      updateSettings({ wordBank: "spbcn-middle" });
-                      setActivePlan(null);
-                    }}
-                    type="button"
-                  >
-                    Middle ({wordBank.length})
-                  </button>
-                  <button
-                    className={`setting-chip ${settings.wordBank === "spbcn-high" ? "setting-chip-active" : ""}`}
-                    onClick={() => {
-                      updateSettings({ wordBank: "spbcn-high" });
-                      setActivePlan(null);
-                    }}
-                    type="button"
-                  >
-                    High ({wordBankHigh.length})
-                  </button>
-                  <button
-                    className={`setting-chip ${settings.wordBank === "etymology" ? "setting-chip-active" : ""}`}
-                    onClick={() => {
-                      updateSettings({ wordBank: "etymology" });
-                      setActivePlan(null);
-                    }}
-                    type="button"
-                  >
-                    Etymology ({wordBankEtymology.length})
-                  </button>
+                  {(["spbcn-middle", "spbcn-high", "etymology"] as const).map((bankId) => {
+                    const isSelected = settings.wordBanks.includes(bankId);
+                    const label =
+                      bankId === "spbcn-middle"
+                        ? `Middle (${wordBank.length})`
+                        : bankId === "spbcn-high"
+                          ? `High (${wordBankHigh.length})`
+                          : `Etymology (${wordBankEtymology.length})`;
+                    return (
+                      <button
+                        key={bankId}
+                        className={`setting-chip ${isSelected ? "setting-chip-active" : ""}`}
+                        onClick={() => {
+                          const current = settings.wordBanks;
+                          let next: string[];
+                          if (isSelected) {
+                            next = current.filter((b) => b !== bankId);
+                            if (next.length === 0) return;
+                          } else {
+                            next = [...current, bankId];
+                          }
+                          updateSettings({ wordBanks: next });
+                          setActivePlan(null);
+                        }}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
-                {settings.wordBank === "etymology" && (
+                {settings.wordBanks.includes("etymology") && (
                   <div className="mt-3">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold text-[color:var(--foreground)]">
