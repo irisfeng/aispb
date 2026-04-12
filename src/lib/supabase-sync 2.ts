@@ -13,15 +13,11 @@ export async function loadSettingsFromSupabase(
   const supabase = getClient();
   const { data, error } = await supabase
     .from("user_settings")
-    .select("daily_goal, round_duration_seconds, pronouncer_enabled, word_bank, etymology_languages")
+    .select("daily_goal, round_duration_seconds, pronouncer_enabled, word_bank")
     .eq("user_id", userId)
     .single();
 
-  if (error) {
-    console.error("[supabase-sync] loadSettings error:", error.message);
-    return null;
-  }
-  if (!data) return null;
+  if (error || !data) return null;
 
   // Migrate legacy word_bank string → wordBanks array
   const wordBanks: string[] = Array.isArray(data.word_bank)
@@ -35,7 +31,6 @@ export async function loadSettingsFromSupabase(
     roundDurationSeconds: data.round_duration_seconds,
     pronouncerEnabled: data.pronouncer_enabled,
     wordBanks,
-    etymologyLanguages: data.etymology_languages ?? undefined,
   };
 }
 
@@ -44,16 +39,14 @@ export async function saveSettingsToSupabase(
   settings: DrillSettings,
 ): Promise<void> {
   const supabase = getClient();
-  const { error } = await supabase.from("user_settings").upsert({
+  await supabase.from("user_settings").upsert({
     user_id: userId,
     daily_goal: settings.dailyGoal,
     round_duration_seconds: settings.roundDurationSeconds,
     pronouncer_enabled: settings.pronouncerEnabled,
     word_bank: settings.wordBanks,
-    etymology_languages: settings.etymologyLanguages ?? null,
     updated_at: new Date().toISOString(),
   });
-  if (error) console.error("[supabase-sync] saveSettings error:", error.message);
 }
 
 // ---- Progress ----
@@ -67,11 +60,7 @@ export async function loadProgressFromSupabase(
     .select("*")
     .eq("user_id", userId);
 
-  if (error) {
-    console.error("[supabase-sync] loadProgress error:", error.message);
-    return null;
-  }
-  if (!data || data.length === 0) return null;
+  if (error || !data || data.length === 0) return null;
 
   const progress: ProgressMap = {};
   for (const row of data) {
@@ -115,8 +104,7 @@ export async function saveProgressToSupabase(
   if (rows.length === 0) return;
 
   // Batch upsert — Supabase supports this natively
-  const { error: upsertError } = await supabase
+  await supabase
     .from("user_progress")
     .upsert(rows, { onConflict: "user_id,word_id" });
-  if (upsertError) console.error("[supabase-sync] saveProgress error:", upsertError.message);
 }

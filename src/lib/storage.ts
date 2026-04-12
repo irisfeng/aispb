@@ -27,7 +27,7 @@ export const defaultSettings: DrillSettings = {
   dailyGoal: 50,
   roundDurationSeconds: 60,
   pronouncerEnabled: true,
-  wordBank: "spbcn-middle",
+  wordBanks: ["spbcn-middle"],
 };
 
 function canUseStorage() {
@@ -57,7 +57,7 @@ function readJson<T>(key: string, fallback: T): T {
 // timer math, planning, or spaced-repetition calculations.
 // ---------------------------------------------------------------------------
 
-const VALID_DAILY_GOALS = new Set([20, 30, 50, 80, 100]);
+const VALID_DAILY_GOALS = new Set([20, 30, 50, 80, 100, 150, 200]);
 const VALID_ROUND_DURATIONS = new Set([60, 90]);
 const VALID_WORD_BANKS = new Set(["spbcn-middle", "spbcn-high", "etymology"]);
 
@@ -68,14 +68,26 @@ function isValidDrillSettings(value: unknown): value is DrillSettings {
 
   const obj = value as Record<string, unknown>;
 
+  // Migrate legacy wordBank string → wordBanks array
+  if (typeof obj.wordBank === "string" && !obj.wordBanks) {
+    if (VALID_WORD_BANKS.has(obj.wordBank)) {
+      obj.wordBanks = [obj.wordBank];
+    }
+    delete obj.wordBank;
+  }
+
+  const validWordBanks =
+    Array.isArray(obj.wordBanks) &&
+    obj.wordBanks.length > 0 &&
+    obj.wordBanks.every((b: unknown) => typeof b === "string" && VALID_WORD_BANKS.has(b as string));
+
   return (
     typeof obj.dailyGoal === "number" &&
     VALID_DAILY_GOALS.has(obj.dailyGoal) &&
     typeof obj.roundDurationSeconds === "number" &&
     VALID_ROUND_DURATIONS.has(obj.roundDurationSeconds) &&
     typeof obj.pronouncerEnabled === "boolean" &&
-    (obj.wordBank === undefined ||
-      (typeof obj.wordBank === "string" && VALID_WORD_BANKS.has(obj.wordBank))) &&
+    (obj.wordBanks === undefined || validWordBanks) &&
     (obj.etymologyLanguages === undefined ||
       (Array.isArray(obj.etymologyLanguages) &&
         obj.etymologyLanguages.every((l: unknown) => typeof l === "string")))
@@ -118,8 +130,8 @@ export function loadSettings(): DrillSettings {
   const raw = readJson<unknown>(settingsKey(), defaultSettings);
   if (!isValidDrillSettings(raw)) return defaultSettings;
   const settings = raw as DrillSettings;
-  if (!settings.wordBank) {
-    return { ...settings, wordBank: "spbcn-middle" };
+  if (!settings.wordBanks || settings.wordBanks.length === 0) {
+    return { ...settings, wordBanks: ["spbcn-middle"] };
   }
   return settings;
 }
