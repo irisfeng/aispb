@@ -2,6 +2,7 @@
 
 import {
   startTransition,
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -70,7 +71,9 @@ import type {
   DrillWord,
   NotebookEntry,
   ProgressMap,
+  QueuedTask,
   SubmissionState,
+  TaskResult,
 } from "@/lib/types";
 import { wordBank } from "@/lib/word-bank";
 import { wordBankHigh } from "@/lib/word-bank-high";
@@ -342,6 +345,11 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [browseIndex, setBrowseIndex] = useState(0);
   const [browseKnown, setBrowseKnown] = useState(0);
   const [browseUnknown, setBrowseUnknown] = useState(0);
+  const [pendingTasks, setPendingTasks] = useState<QueuedTask[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<TaskResult[]>([]);
+  const [taskTransition, setTaskTransition] = useState(false);
+  const [currentTaskBank, setCurrentTaskBank] = useState<string | null>(null);
+  const [taskStartTime, setTaskStartTime] = useState<number>(0);
 
   const activeWordBank = useMemo(() => {
     const banks = settings.wordBanks;
@@ -364,6 +372,21 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     }
     return result;
   }, [settings.wordBanks, settings.etymologyLanguages]);
+
+  const getWordsForBank = useCallback((bankId: string): DrillWord[] => {
+    if (bankId === "spbcn-middle") return wordBank;
+    if (bankId === "spbcn-high") return wordBankHigh;
+    if (bankId === "etymology") {
+      const langs = settings.etymologyLanguages;
+      if (langs && langs.length > 0) {
+        const langSet = new Set(langs);
+        const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
+        return filtered.length > 0 ? filtered : wordBankEtymology;
+      }
+      return wordBankEtymology;
+    }
+    return [];
+  }, [settings.etymologyLanguages]);
 
   const etymologyLanguageCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -727,6 +750,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
           wordId: currentWord.id,
           result: "correct",
           todayKey,
+          isPractice: activePlan?.isPractice,
         }),
       );
       setStatus("correct");
@@ -1345,12 +1369,91 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     roundLockedRef.current = false;
     roundIdRef.current += 1;
 
-    const nextPlan = createPreviewPlan(activeWordBank, settings, progress);
+    const banks = settings.wordBanks;
+    if (banks.length <= 1) {
+      // Single bank — current behavior, no queue
+      const nextPlan = createPreviewPlan(activeWordBank, settings, progress);
+      setActivePlan(nextPlan);
+      setTriageActive(true);
+      setTriageSelected(new Set());
+      setTriageBackfilledIds(new Set());
+      setPendingTasks([]);
+      setCompletedTasks([]);
+      setCurrentTaskBank(banks[0] ?? "spbcn-middle");
+      setTaskStartTime(Date.now());
+      return;
+    }
 
-    setActivePlan(nextPlan);
+    // Multi-bank — create queue
+    const perTask = Math.floor(settings.dailyGoal / banks.length);
+    const remainder = settings.dailyGoal % banks.length;
+    const queue: QueuedTask[] = banks.map((bank, i) => ({
+      wordBank: bank,
+      wordCount: perTask + (i === 0 ? remainder : 0),
+    }));
+
+    // Start first task
+    const first = queue[0];
+    const firstWords = getWordsForBank(first.wordBank);
+    const firstPlan = createDrillPlan({
+      words: firstWords,
+      settings: { ...settings, dailyGoal: first.wordCount },
+      progress,
+      todayKey,
+    });
+
+    setActivePlan(firstPlan);
     setTriageActive(true);
     setTriageSelected(new Set());
     setTriageBackfilledIds(new Set());
+    setPendingTasks(queue.slice(1));
+    setCompletedTasks([]);
+    setCurrentTaskBank(first.wordBank);
+    setTaskStartTime(Date.now());
+  }
+
+  function startNextTask() {
+    if (pendingTasks.length === 0) return;
+
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+
+    const next = pendingTasks[0];
+    const nextWords = getWordsForBank(next.wordBank);
+    const nextPlan = createDrillPlan({
+      words: nextWords,
+      settings: { ...settings, dailyGoal: next.wordCount },
+      progress,
+      todayKey,
+    });
+
+    setActivePlan(nextPlan);
+    setPendingTasks(pendingTasks.slice(1));
+    setCurrentTaskBank(next.wordBank);
+    setTaskTransition(false);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setCurrentIndex(0);
+    setSecondsLeft(nextPlan.settings.roundDurationSeconds);
+    resetSpeechAttempt();
+    setSpellingTranscript("");
+    setStatus("idle");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setBestStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setSessionMisses([]);
+    setLastPronouncerProvider(null);
+    setTaskStartTime(Date.now());
+    setFeed([
+      createFeedEntry(
+        "Session start",
+        `Next task: ${next.wordBank}. ${nextPlan.stats.reviewCount} review, ${nextPlan.stats.freshCount} fresh.`,
+        "system",
+      ),
+    ]);
   }
 
   function startDrillFromTriage() {
@@ -1596,6 +1699,21 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
       }
 
       if (currentIndex === activePlan.words.length - 1) {
+        if (pendingTasks.length > 0 && !activePlan?.isPractice) {
+          // Record completed task result
+          setCompletedTasks((prev) => [
+            ...prev,
+            {
+              wordBank: currentTaskBank ?? "unknown",
+              total: activePlan.words.length,
+              correct: sessionCorrectCount,
+              elapsed: Math.round((Date.now() - taskStartTime) / 1000),
+            },
+          ]);
+          setTaskTransition(true);
+          setSessionStarted(false);
+          return;
+        }
         setSessionComplete(true);
         setSessionStarted(false);
         setFeedExpanded(false);
@@ -1671,6 +1789,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
         wordId: currentWord.id,
         result,
         todayKey,
+        isPractice: activePlan?.isPractice,
       }),
     );
     // Fetch dictionary cue for the reveal card (use cache if available)
@@ -2169,6 +2288,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                               wordId: currentWord.id,
                               result: "correct",
                               todayKey,
+                              isPractice: activePlan?.isPractice,
                             }),
                           );
                           setSessionMisses((prev) =>
