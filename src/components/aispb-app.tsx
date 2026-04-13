@@ -142,6 +142,12 @@ interface FeedEntry {
   content: string;
 }
 
+const bankDisplayName: Record<string, string> = {
+  "spbcn-middle": "Middle School",
+  "spbcn-high": "High School",
+  etymology: "Etymology",
+};
+
 const goalOptions = [50, 80, 100, 150, 200];
 const roundOptions = [60, 90];
 const suggestedPromptOrder: DrillPromptKind[] = [
@@ -1577,6 +1583,58 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     ]);
   }
 
+  function startPractice() {
+    if (notebookEntries.length === 0) return;
+
+    // Fisher-Yates shuffle, take up to 100
+    const shuffled = [...notebookEntries]
+      .map((e) => e.word)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 100);
+
+    const practicePlan: DrillPlan = {
+      id: `practice-${todayKey}-${Date.now()}`,
+      createdOn: todayKey,
+      settings,
+      words: shuffled.map((word) => ({
+        ...word,
+        planReason: "review" as const,
+      })),
+      stats: {
+        reviewCount: shuffled.length,
+        freshCount: 0,
+      },
+      isPractice: true,
+    };
+
+    roundLockedRef.current = false;
+    roundIdRef.current += 1;
+    setActivePlan(practicePlan);
+    setSessionStarted(true);
+    setSessionComplete(false);
+    setTriageActive(false);
+    setCurrentIndex(0);
+    setStatus("idle");
+    setAttemptDraft("");
+    setHintsUsed([]);
+    setRestartCount(0);
+    setStreak(0);
+    setBestStreak(0);
+    setSessionCorrectCount(0);
+    setSessionMissCount(0);
+    setSessionMisses([]);
+    setLastPronouncerProvider(null);
+    resetSpeechAttempt();
+    setSpellingTranscript("");
+    setFeed([
+      createFeedEntry(
+        "Practice start",
+        `Practicing ${practicePlan.words.length} word${practicePlan.words.length !== 1 ? "s" : ""} from your notebook. No progress updates — just drill.`,
+        "system",
+      ),
+    ]);
+  }
+
   function startBrowseMode() {
     // Get unseen words (no progress record OR not knownAt) from active word bank
     const unseenWords = activeWordBank.filter((w) => {
@@ -2667,6 +2725,26 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
               </div>
             </div>
 
+            {settings.wordBanks.length > 1 && (
+              <div className="mb-2 rounded-2xl border border-[color:var(--line)] bg-white/60 p-3">
+                <p className="text-xs font-semibold text-[color:var(--muted)] uppercase tracking-wider mb-1.5">Queue</p>
+                <div className="flex flex-wrap gap-2">
+                  {settings.wordBanks.map((bank) => (
+                    <span
+                      key={bank}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        bank === settings.wordBanks[0]
+                          ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                          : "bg-white/70 text-[color:var(--muted)] border border-[color:var(--line)]"
+                      }`}
+                    >
+                      {bankDisplayName[bank] ?? bank}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row">
               <button
                 className="primary-button"
@@ -2818,6 +2896,58 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
         </section>
       ) : null}
 
+      {taskTransition && !sessionComplete ? (
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6 px-4 text-center">
+          <div className="w-full max-w-sm rounded-[32px] border border-[color:var(--line)] bg-white/80 p-8 shadow-[0_20px_60px_rgba(17,32,51,0.08)]">
+            <p className="eyebrow">Task Complete</p>
+            <h2 className="mt-3 font-[family-name:var(--font-display)] text-4xl font-semibold text-[color:var(--foreground)]">
+              {bankDisplayName[currentTaskBank ?? ""] ?? currentTaskBank ?? ""}
+            </h2>
+
+            {completedTasks.length > 0 && (() => {
+              const last = completedTasks[completedTasks.length - 1];
+              const acc = last.total > 0 ? Math.round((last.correct / last.total) * 100) : 0;
+              return (
+                <div className="mt-6 grid grid-cols-3 gap-3">
+                  <div className="stat-card">
+                    <span className="stat-label">Words</span>
+                    <strong>{last.total}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">Correct</span>
+                    <strong>{last.correct}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">Accuracy</span>
+                    <strong>{acc}%</strong>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="mt-8 flex flex-col gap-3">
+              <button
+                className="primary-button"
+                onClick={startNextTask}
+                type="button"
+              >
+                Continue to next task
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setSessionComplete(true);
+                  setTaskTransition(false);
+                }}
+                type="button"
+              >
+                End session
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {sessionComplete ? (
         <section
           className="grid gap-4 lg:grid-cols-[1.04fr_0.96fr]"
@@ -2859,6 +2989,34 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                 <strong>{notebookEntries.length}</strong>
               </div>
             </div>
+
+            {completedTasks.length > 0 && (
+              <div className="mt-5 rounded-2xl border border-[color:var(--line)] bg-white/60 p-4">
+                <p className="mb-3 text-xs font-semibold text-[color:var(--muted)] uppercase tracking-wider">
+                  Session summary
+                </p>
+                <div className="space-y-2">
+                  {[...completedTasks, {
+                    wordBank: currentTaskBank ?? "",
+                    total: activePlan?.words.length ?? 0,
+                    correct: sessionCorrectCount,
+                    elapsed: 0,
+                  }].map((task, i) => {
+                    const acc = task.total > 0 ? Math.round((task.correct / task.total) * 100) : 0;
+                    return (
+                      <div key={i} className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-[color:var(--foreground)]">
+                          {bankDisplayName[task.wordBank] ?? task.wordBank}
+                        </span>
+                        <span className="text-sm text-[color:var(--muted)]">
+                          {task.correct}/{task.total} &middot; {acc}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="mt-5 h-2.5 overflow-hidden rounded-full bg-white/55">
               <div
