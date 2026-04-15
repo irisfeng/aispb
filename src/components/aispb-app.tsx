@@ -3181,7 +3181,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   {dueNotebookCount > 0 ? (
                     <button
                       type="button"
-                      onClick={beginSession}
+                      onClick={startPractice}
                       className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[color:var(--accent)]/85"
                     >
                       Practice
