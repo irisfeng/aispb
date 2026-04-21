@@ -2,7 +2,6 @@
 
 import {
   startTransition,
-  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -71,7 +70,6 @@ import type {
   DrillWord,
   NotebookEntry,
   ProgressMap,
-  QueuedTask,
   SubmissionState,
   TaskResult,
 } from "@/lib/types";
@@ -186,6 +184,20 @@ function createFeedEntry(
     content,
     tone,
   };
+}
+
+function shuffleWithSeed<T>(items: T[], seed: string): T[] {
+  const out = [...items];
+  let state = 0;
+  for (let i = 0; i < seed.length; i++) {
+    state = (state * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  for (let i = out.length - 1; i > 0; i--) {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    const j = state % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 function createPreviewPlan(words: DrillWord[], settings: DrillSettings, progress: ProgressMap) {
@@ -351,9 +363,7 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
   const [browseIndex, setBrowseIndex] = useState(0);
   const [browseKnown, setBrowseKnown] = useState(0);
   const [browseUnknown, setBrowseUnknown] = useState(0);
-  const [pendingTasks, setPendingTasks] = useState<QueuedTask[]>([]);
   const [completedTasks, setCompletedTasks] = useState<TaskResult[]>([]);
-  const [taskTransition, setTaskTransition] = useState(false);
   const [currentTaskBank, setCurrentTaskBank] = useState<string | null>(null);
   const [taskStartTime, setTaskStartTime] = useState<number>(0);
 
@@ -378,21 +388,6 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     }
     return result;
   }, [settings.wordBanks, settings.etymologyLanguages]);
-
-  const getWordsForBank = useCallback((bankId: string): DrillWord[] => {
-    if (bankId === "spbcn-middle") return wordBank;
-    if (bankId === "spbcn-high") return wordBankHigh;
-    if (bankId === "etymology") {
-      const langs = settings.etymologyLanguages;
-      if (langs && langs.length > 0) {
-        const langSet = new Set(langs);
-        const filtered = wordBankEtymology.filter((w) => w.category && langSet.has(w.category));
-        return filtered.length > 0 ? filtered : wordBankEtymology;
-      }
-      return wordBankEtymology;
-    }
-    return [];
-  }, [settings.etymologyLanguages]);
 
   const etymologyLanguageCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1376,90 +1371,28 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
     roundIdRef.current += 1;
 
     const banks = settings.wordBanks;
-    if (banks.length <= 1) {
-      // Single bank — current behavior, no queue
-      const nextPlan = createPreviewPlan(activeWordBank, settings, progress);
-      setActivePlan(nextPlan);
-      setTriageActive(true);
-      setTriageSelected(new Set());
-      setTriageBackfilledIds(new Set());
-      setPendingTasks([]);
-      setCompletedTasks([]);
-      setCurrentTaskBank(banks[0] ?? "spbcn-middle");
-      setTaskStartTime(Date.now());
-      return;
-    }
-
-    // Multi-bank — create queue
-    const perTask = Math.floor(settings.dailyGoal / banks.length);
-    const remainder = settings.dailyGoal % banks.length;
-    const queue: QueuedTask[] = banks.map((bank, i) => ({
-      wordBank: bank,
-      wordCount: perTask + (i === 0 ? remainder : 0),
-    }));
-
-    // Start first task
-    const first = queue[0];
-    const firstWords = getWordsForBank(first.wordBank);
-    const firstPlan = createDrillPlan({
-      words: firstWords,
-      settings: { ...settings, dailyGoal: first.wordCount },
+    let nextPlan = createDrillPlan({
+      words: activeWordBank,
+      settings,
       progress,
       todayKey,
     });
 
-    setActivePlan(firstPlan);
+    // Multi-bank: shuffle merged plan so words from different banks interleave.
+    // Seeded by todayKey + plan.id + banks so same-day same-config is reproducible.
+    if (banks.length > 1) {
+      const seed = `${todayKey}:${nextPlan.id}:${banks.join(",")}`;
+      const shuffled = shuffleWithSeed(nextPlan.words, seed);
+      nextPlan = { ...nextPlan, words: shuffled };
+    }
+
+    setActivePlan(nextPlan);
     setTriageActive(true);
     setTriageSelected(new Set());
     setTriageBackfilledIds(new Set());
-    setPendingTasks(queue.slice(1));
     setCompletedTasks([]);
-    setCurrentTaskBank(first.wordBank);
+    setCurrentTaskBank(banks[0] ?? "spbcn-middle");
     setTaskStartTime(Date.now());
-  }
-
-  function startNextTask() {
-    if (pendingTasks.length === 0) return;
-
-    roundLockedRef.current = false;
-    roundIdRef.current += 1;
-
-    const next = pendingTasks[0];
-    const nextWords = getWordsForBank(next.wordBank);
-    const nextPlan = createDrillPlan({
-      words: nextWords,
-      settings: { ...settings, dailyGoal: next.wordCount },
-      progress,
-      todayKey,
-    });
-
-    setActivePlan(nextPlan);
-    setPendingTasks(pendingTasks.slice(1));
-    setCurrentTaskBank(next.wordBank);
-    setTaskTransition(false);
-    setSessionStarted(true);
-    setSessionComplete(false);
-    setCurrentIndex(0);
-    setSecondsLeft(nextPlan.settings.roundDurationSeconds);
-    resetSpeechAttempt();
-    setSpellingTranscript("");
-    setStatus("idle");
-    setHintsUsed([]);
-    setRestartCount(0);
-    setStreak(0);
-    setBestStreak(0);
-    setSessionCorrectCount(0);
-    setSessionMissCount(0);
-    setSessionMisses([]);
-    setLastPronouncerProvider(null);
-    setTaskStartTime(Date.now());
-    setFeed([
-      createFeedEntry(
-        "Session start",
-        `Next task: ${next.wordBank}. ${nextPlan.stats.reviewCount} review, ${nextPlan.stats.freshCount} fresh.`,
-        "system",
-      ),
-    ]);
   }
 
   function startDrillFromTriage() {
@@ -1757,21 +1690,27 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
       }
 
       if (currentIndex === activePlan.words.length - 1) {
-        if (pendingTasks.length > 0 && !activePlan?.isPractice) {
-          // Record completed task result
-          setCompletedTasks((prev) => [
-            ...prev,
-            {
-              wordBank: currentTaskBank ?? "unknown",
-              total: activePlan.words.length,
-              correct: sessionCorrectCount,
-              elapsed: Math.round((Date.now() - taskStartTime) / 1000),
-            },
-          ]);
-          setTaskTransition(true);
-          setSessionStarted(false);
-          return;
+        // Multi-bank mixed session: compute per-bank stats from plan.words + sessionMisses
+        if (settings.wordBanks.length > 1) {
+          const missedIds = new Set(sessionMisses.map((m) => m.word.id));
+          const byBank = new Map<string, { total: number; correct: number }>();
+          for (const w of activePlan.words) {
+            const bank = w.source;
+            const s = byBank.get(bank) ?? { total: 0, correct: 0 };
+            s.total += 1;
+            if (!missedIds.has(w.id)) s.correct += 1;
+            byBank.set(bank, s);
+          }
+          const totalElapsed = Math.round((Date.now() - taskStartTime) / 1000);
+          const bankCount = Math.max(byBank.size, 1);
+          const perBankElapsed = Math.round(totalElapsed / bankCount);
+          const tasks: TaskResult[] = [];
+          byBank.forEach((s, bank) => {
+            tasks.push({ wordBank: bank, total: s.total, correct: s.correct, elapsed: perBankElapsed });
+          });
+          setCompletedTasks(tasks);
         }
+
         setSessionComplete(true);
         setSessionStarted(false);
         setFeedExpanded(false);
@@ -2896,58 +2835,6 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
         </section>
       ) : null}
 
-      {taskTransition && !sessionComplete ? (
-        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6 px-4 text-center">
-          <div className="w-full max-w-sm rounded-[32px] border border-[color:var(--line)] bg-white/80 p-8 shadow-[0_20px_60px_rgba(17,32,51,0.08)]">
-            <p className="eyebrow">Task Complete</p>
-            <h2 className="mt-3 font-[family-name:var(--font-display)] text-4xl font-semibold text-[color:var(--foreground)]">
-              {bankDisplayName[currentTaskBank ?? ""] ?? currentTaskBank ?? ""}
-            </h2>
-
-            {completedTasks.length > 0 && (() => {
-              const last = completedTasks[completedTasks.length - 1];
-              const acc = last.total > 0 ? Math.round((last.correct / last.total) * 100) : 0;
-              return (
-                <div className="mt-6 grid grid-cols-3 gap-3">
-                  <div className="stat-card">
-                    <span className="stat-label">Words</span>
-                    <strong>{last.total}</strong>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Correct</span>
-                    <strong>{last.correct}</strong>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Accuracy</span>
-                    <strong>{acc}%</strong>
-                  </div>
-                </div>
-              );
-            })()}
-
-            <div className="mt-8 flex flex-col gap-3">
-              <button
-                className="primary-button"
-                onClick={startNextTask}
-                type="button"
-              >
-                Continue to next task
-              </button>
-              <button
-                className="secondary-button"
-                onClick={() => {
-                  setSessionComplete(true);
-                  setTaskTransition(false);
-                }}
-                type="button"
-              >
-                End session
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {sessionComplete ? (
         <section
           className="grid gap-4 lg:grid-cols-[1.04fr_0.96fr]"
@@ -2996,12 +2883,15 @@ export function AispbApp({ authUser, onSignOut }: AispbAppProps) {
                   Session summary
                 </p>
                 <div className="space-y-2">
-                  {[...completedTasks, {
-                    wordBank: currentTaskBank ?? "",
-                    total: activePlan?.words.length ?? 0,
-                    correct: sessionCorrectCount,
-                    elapsed: 0,
-                  }].map((task, i) => {
+                  {(settings.wordBanks.length > 1
+                    ? completedTasks
+                    : [...completedTasks, {
+                        wordBank: currentTaskBank ?? "",
+                        total: activePlan?.words.length ?? 0,
+                        correct: sessionCorrectCount,
+                        elapsed: 0,
+                      }]
+                  ).map((task, i) => {
                     const acc = task.total > 0 ? Math.round((task.correct / task.total) * 100) : 0;
                     return (
                       <div key={i} className="flex items-center justify-between gap-3">
